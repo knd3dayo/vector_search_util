@@ -7,26 +7,24 @@ import argparse
 from fastmcp import FastMCP
 from pydantic import Field
 from langchain.docstore.document import Document
-from src.vector_search_util.util.vector_db_client import VectorDBClient, VectorSearchRequest
-mcp = FastMCP("vector_search_mcp") #type :ignore
+from vector_search_util.langchain.langchain_client import LangchainClient
+from vector_search_util.langchain.langchain_vector_db import LangChainVectorDB
+from vector_search_util.llm.embedding_config import EmbeddingConfig
+
+mcp = FastMCP("vector_search_util") #type :ignore
 
 async def vector_search(
     query: Annotated[str, Field(description="The query string to search for in the vector database.")],
     num_results: Annotated[int, Field(description="The number of results to return.", ge=1, le=100)] = 5,
     filter: Annotated[Optional[dict[str, Any]], Field(description="Optional filter to apply to the search results.")]= {},
 ) -> Annotated[list[Document], Field(description="A list of documents matching the search query.")]: 
+    config = EmbeddingConfig()
+    client = LangchainClient.create_client(config)
+    vector_db = LangChainVectorDB.create_vector_db(client)
+    if filter is None:
+        filter = {}
+    return await vector_db.vector_search(query, k=num_results, filter=filter)
 
-    vector_search_request = VectorSearchRequest (
-        vector_db_name="default",
-        query=query,
-        k=num_results,
-        filter=filter if filter is not None else {}
-    )
-    vector_searcher = VectorDBClient()
-
-    # vector_searchを呼び出す
-    results = await vector_searcher.vector_search(vector_search_request)
-    return results
 
 # 引数解析用の関数
 def parse_args() -> argparse.Namespace:

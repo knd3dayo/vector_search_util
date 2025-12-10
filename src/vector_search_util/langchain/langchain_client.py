@@ -1,61 +1,66 @@
 
 import os
 
-from typing import Optional
-from pydantic import BaseModel, Field
+# 抽象クラス
+from abc import ABC, abstractmethod
+from langchain_core.embeddings import Embeddings
 
 from langchain_openai import AzureOpenAIEmbeddings
 from langchain_openai import OpenAIEmbeddings
+from vector_search_util.llm.embedding_config import EmbeddingConfig
 
 import vector_search_util.log.log_settings as log_settings
 logger = log_settings.getLogger(__name__)
 
-class LangChainOpenAIClient(BaseModel):
+class LangchainClient:
 
-    openai_key: str = Field(default=os.getenv("OPENAI_API_KEY",""), alias="openai_key")
-    azure_openai: bool = Field(default=os.getenv("AZURE_OPENAI","false").lower() == "true", alias="azure_openai")
-    azure_openai_api_version: Optional[str] = Field(default=os.getenv("AZURE_OPENAI_API_VERSION",""), alias="azure_openai_api_version")
-    azure_openai_endpoint: Optional[str] = Field(default=os.getenv("AZURE_OPENAI_ENDPOINT",""), alias="azure_openai_endpoint")
-    openai_base_url: Optional[str] = Field(default=os.getenv("OPENAI_BASE_URL",""), alias="openai_base_url")
-    embedding_model: str = Field(default=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"), alias="default_embedding_model")
+    llm_config: EmbeddingConfig = EmbeddingConfig()
+    embedding: Embeddings | None = None
 
-    def get_embedding_client(self):
-        if not self.embedding_model:
-            raise ValueError("embedding_model is not set.")
+    @classmethod
+    def create_client(cls, llm_config: EmbeddingConfig) -> 'LangchainClient':
 
-        params = self.create_client_params()
-        params["model"] = self.embedding_model
-        if (self.azure_openai):
-            # modelを設定する。
-            embeddings = AzureOpenAIEmbeddings(
+        if llm_config.llm_provider == "openai":
+            client = LangchainOpenAIClient(llm_config)
+            return client
+        elif llm_config.llm_provider == "azure_openai":
+            client = LangchainAzureOpenAIClient(llm_config)
+            return client
+        else:
+            raise ValueError(f"Unsupported LLM provider: {llm_config.llm_provider}")
+
+        
+class LangchainOpenAIClient(LangchainClient):
+
+    def __init__(self, llm_config: EmbeddingConfig|None = None) -> None:
+        if llm_config:
+            self.llm_config = llm_config
+
+        params = {}
+        params["api_key"] = self.llm_config.api_key
+        if self.llm_config.base_url:
+            params["base_url"] = self.llm_config.base_url
+
+        params["model"] = self.llm_config.embedding_model
+        self.embedding = OpenAIEmbeddings(
                 **params
             )
-        else:
-            embeddings = OpenAIEmbeddings(
+        
+class LangchainAzureOpenAIClient(LangchainClient):
+
+    def __init__(self, llm_config: EmbeddingConfig|None = None) -> None:
+        if llm_config:
+            self.llm_config = llm_config
+
+        params = {}
+        params["api_key"] = self.llm_config.api_key
+        if self.llm_config.endpoint:
+            params["azure_endpoint"] = self.llm_config.endpoint
+        if self.llm_config.api_version:
+            params["api_version"] = self.llm_config.api_version
+
+        params["model"] = self.llm_config.embedding_model
+
+        self.embedding = AzureOpenAIEmbeddings(
                 **params
             )
-        return embeddings
-        
-    def create_client_params(self) -> dict:
-        if self.azure_openai:
-            return self.__create_azure_openai_dict()
-        else:
-            return self.__create_openai_dict()
-        
-    def __create_openai_dict(self) -> dict:
-        completion_dict = {}
-        completion_dict["api_key"] = self.openai_key
-        if self.openai_base_url:
-            completion_dict["base_url"] = self.openai_base_url
-        return completion_dict
-
-    def __create_azure_openai_dict(self) -> dict:
-        completion_dict = {}
-        completion_dict["api_key"] = self.openai_key
-        if self.openai_base_url:
-            completion_dict["base_url"] = self.openai_base_url
-        else:
-            completion_dict["azure_endpoint"] = self.azure_openai_endpoint
-            completion_dict["api_version"] = self.azure_openai_api_version
-        return completion_dict
-    

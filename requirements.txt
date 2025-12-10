@@ -14,3 +14,9 @@ chromadb==0.5.0
 
 # For MCP
 fastmcp
+
+# misc
+tqdm
+pandas
+openpyxl
+xlsxwriter

@@ -9,16 +9,8 @@ logger = log_settings.getLogger(__name__)
 class EmbeddingData(BaseModel):
     content: str
     source_id: str
-    vector_db_name: str = ""  # 追加: ベクトルDB名
-
     metadata : dict[str, Any] = Field(default_factory=dict)
-    # source_path: str = ""
-    # image_url: str = ""
-    # folder_path: str 
-    # description: str = ""
-    # "source_type": 0,
-
-
+    
 class VectorSearchRequest(BaseModel):
     vector_db_name: str = Field(
         default="default",
