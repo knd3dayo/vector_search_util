@@ -1,7 +1,7 @@
 from vector_search_util.llm.embedding_config import EmbeddingConfig
 from vector_search_util.util.client import EmbeddingClient, CategoryBatchClient, CategoryData
 
-async def delete_category(input_file_path: str, name_column: str):
+async def delete_categories(input_file_path: str, name_column: str):
 
     config = EmbeddingConfig()
     embedding_client = EmbeddingClient(config)
@@ -9,7 +9,7 @@ async def delete_category(input_file_path: str, name_column: str):
     await batch_client.delete_category_data_from_excel(input_file_path, name_column)
     print(f"Deleted categories based on names from {input_file_path}.")
 
-async def unload_category(output_file: str):
+async def unload_categories(output_file: str):
 
     config = EmbeddingConfig()
     embedding_client = EmbeddingClient(config)
@@ -18,7 +18,7 @@ async def unload_category(output_file: str):
     print(f"Unloaded categories to {output_file}.")
 
 
-async def load_category(input_file_path: str, name_column: str, description_column: str):
+async def load_categories(input_file_path: str, name_column: str, description_column: str):
 
     config = EmbeddingConfig()
     embedding_client = EmbeddingClient(config)

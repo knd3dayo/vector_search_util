@@ -1,5 +1,3 @@
-import asyncio
-import argparse
 
 from vector_search_util.llm.embedding_config import EmbeddingConfig
 from vector_search_util.util.client import EmbeddingClient, EmbeddingBatchClient

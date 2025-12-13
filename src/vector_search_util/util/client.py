@@ -21,6 +21,11 @@ class CategoryData(BaseModel):
     name: str
     description: str
 
+# tag_data
+class TagData(BaseModel):
+    name: str
+    description: str
+
 # sqlite3
 class SQLiteClient:
     initialized: bool = False
@@ -32,6 +37,7 @@ class SQLiteClient:
                 os.makedirs(dirname)
             SQLiteClient.initialized = True
             self.create_categories_table()
+            self.create_tags_table()
 
     def create_categories_table(self):
         # DBPropertiesテーブルが存在しない場合は作成する
@@ -41,6 +47,19 @@ class SQLiteClient:
                 CREATE TABLE IF NOT EXISTS categories (
                     name TEXT NOT NULL PRIMARY KEY,
                     description TEXT NOT NULL
+                )
+            ''')
+            conn.commit()
+
+    def create_tags_table(self):
+        # DBPropertiesテーブルが存在しない場合は作成する
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.cursor()
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS tags (
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    PRIMARY KEY (name)
                 )
             ''')
             conn.commit()
@@ -56,22 +75,22 @@ class SQLiteClient:
                     return CategoryData(name=row[0], description=row[1])
                 else:
                     return None
-    async def delete_category(self, name: str):
+    async def delete_categories(self, names: list[str]):
         async with aiosqlite.connect(self.db_path) as conn:
             async with conn.cursor() as cur:
-                await cur.execute('''
+                await cur.executemany('''
                     DELETE FROM categories WHERE name = ?
-                ''', (name,))
+                ''', [(name,) for name in names])
             await conn.commit()
 
-    async def upsert_category(self, category: CategoryData):
+    async def upsert_categories(self, category_list: list[CategoryData]):
         async with aiosqlite.connect(self.db_path) as conn:
             async with conn.cursor() as cur:
-                await cur.execute('''
+                await cur.executemany('''
                     INSERT INTO categories (name, description)
                     VALUES (?, ?)
                     ON CONFLICT(name) DO UPDATE SET description=excluded.description
-                ''', (category.name, category.description))
+                ''', [(category.name, category.description) for category in category_list])
             await conn.commit()
     
     async def list_categories(self) -> list[CategoryData]:
@@ -86,15 +105,87 @@ class SQLiteClient:
                     categories.append(CategoryData(name=row[0], description=row[1]))
         return categories
 
+    async def delete_all_categories(self):
+        async with aiosqlite.connect(self.db_path) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute('''
+                    DELETE FROM categories
+                ''')
+            await conn.commit()
+
+    async def update_new_categories(self, data_list_category_names_set: set[str]):
+        existing_category_names_set = set([category.name for category in await self.list_categories()])
+        new_category_names_set = data_list_category_names_set - existing_category_names_set
+        new_categories = [CategoryData(name=category_name, description="") for category_name in new_category_names_set]
+        if new_categories:
+            await self.upsert_categories(new_categories)
+
+    async def get_tag(self, name: str) -> TagData | None:
+        async with aiosqlite.connect(self.db_path) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute('''
+                    SELECT name, description FROM tags WHERE name = ?
+                ''', (name,))
+                row = await cur.fetchone()
+                if row:
+                    return TagData(name=row[0], description=row[1])
+                else:
+                    return None
+                
+    async def list_tags(self) -> list[TagData]:
+        tags = []
+        async with aiosqlite.connect(self.db_path) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute('''
+                    SELECT name, description FROM tags
+                ''')
+                rows = await cur.fetchall()
+                for row in rows:
+                    tags.append(TagData(name=row[0], description=row[1]))
+        return tags
+
+    async def upsert_tags(self, tag_list: list[TagData]):
+        async with aiosqlite.connect(self.db_path) as conn:
+            async with conn.cursor() as cur:
+                await cur.executemany('''
+                    INSERT INTO tags (name, description)
+                    VALUES (?, ?)
+                    ON CONFLICT(name) DO UPDATE SET description=excluded.description
+                ''', [(tag.name, tag.description) for tag in tag_list])
+            await conn.commit()
+
+    async def delete_tags(self, names: list[str]):
+        async with aiosqlite.connect(self.db_path) as conn:
+            async with conn.cursor() as cur:
+                await cur.executemany('''
+                    DELETE FROM tags WHERE name = ?
+                ''', [(name,) for name in names])
+            await conn.commit()
+
+    async def delete_all_tags(self):
+        async with aiosqlite.connect(self.db_path) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute('''
+                    DELETE FROM tags
+                ''')
+            await conn.commit()
+
+    async def update_new_tags(self, data_list_metadata_keys_set: set[str]):
+        existing = {t.name for t in await self.list_tags()}
+        new_names = data_list_metadata_keys_set - existing
+        new_tags = [TagData(name=n, description="") for n in new_names]
+        if new_tags:
+            await self.upsert_tags(new_tags)
 
 class EmbeddingClient:
     def __init__(self, config: EmbeddingConfig| None = None):
         if config is None:
             config = EmbeddingConfig()
         self.config = config
+
         self.client = LangchainClient.create_client(config)
         self.vector_db = LangChainVectorDB.create_vector_db(self.client)
-        self.category_db_path: str = os.path.join(self.config.app_data_path, "categories.db")
+        self.category_db_path: str = os.path.join(self.config.app_data_path, "vector_db_search_app.db")
         self.sqlite_client = SQLiteClient(self.category_db_path)
 
 
@@ -109,13 +200,14 @@ class EmbeddingClient:
         await self.vector_db.update_documents(data_list)
         # data_listのcategoryのsetを取得して、カテゴリDBに存在しない場合は追加する
         data_list_category_names_set = set([data.category for data in data_list if data.category is not None])
-        # sqliteのカテゴリ一覧を取得
-        existing_category_names_set = set([category.name for category in await self.sqlite_client.list_categories()])
-        new_category_names_set = data_list_category_names_set - existing_category_names_set
-        for category_name in new_category_names_set:
-            category_data = CategoryData(name=category_name, description="")
-            await self.sqlite_client.upsert_category(category_data)
+        # data_listのmetadataのkeyのsetを取得して、タグDBに存在しない場合は追加する
+        data_list_metadata_keys_set = set([key for data in data_list for key in data.metadata.keys() if key is not None])
 
+        # metadataに新規カテゴリがあれば追加
+        await self.sqlite_client.update_new_categories(data_list_category_names_set)
+
+        # metadataに新規タグがあれば追加
+        await self.sqlite_client.update_new_tags(data_list_metadata_keys_set)
 
     async def vector_search(self, query: str, category: str = "", filter: dict[str, list[str]] ={}, top_k: int = 5) -> list[Document]:
         results = await self.vector_db.vector_search(query, category, filter, top_k)
@@ -125,15 +217,13 @@ class EmbeddingClient:
         return await self.sqlite_client.list_categories()
 
     async def update_categories(self, categories: list[CategoryData]):
-        for category in categories:
-            await self.sqlite_client.upsert_category(category)    
+        await self.sqlite_client.upsert_categories(categories)    
 
     async def get_categories(self) -> list[CategoryData]:
         return await self.sqlite_client.list_categories()
     
     async def delete_categories(self, name_list: list[str]):
-        for name in name_list:
-            await self.sqlite_client.delete_category(name)
+        await self.sqlite_client.delete_categories(name_list)
 
     async def cleanup_categories(self):
         # Sqliteに登録されたカテゴリごとにタグ検索して、データが存在しない場合はそのタグを削除する。
@@ -142,8 +232,16 @@ class EmbeddingClient:
             filter = {self.config.category_key: [category.name]}
             vector_ids, _ = await self.vector_db.get_documents(filter)
             if len(vector_ids) == 0:
-                await self.sqlite_client.delete_category(category.name)
-                
+                await self.sqlite_client.delete_categories([category.name])
+    
+    async def delete_tags(self, name_list: list[str]):
+        await self.sqlite_client.delete_tags(name_list)
+
+    async def list_tags(self) -> list[TagData]:
+        return await self.sqlite_client.list_tags()
+
+    async def update_tags(self, tags: list[TagData]):
+        await self.sqlite_client.upsert_tags(tags)
 
 class EmbeddingBatchClient:
     def __init__(self, embedding_client: EmbeddingClient):
@@ -164,7 +262,7 @@ class EmbeddingBatchClient:
             await asyncio.gather(*tasks)
             progress.close()
 
-    def create_documents_from_dataframe(
+    def __create_documents_from_dataframe__(
         self, df: DataFrame, content_column: str, source_id_column: str, category_column: str, metadata_columns: list[str]
     ) -> list[EmbeddingData]:
         data_list: list[EmbeddingData] = []
@@ -196,7 +294,7 @@ class EmbeddingBatchClient:
     ) -> list[EmbeddingData]:
         df = pd.read_excel(file_path)
         df.replace(to_replace=r"_x000D_", value="", regex=True, inplace=True)
-        return self.create_documents_from_dataframe(df, content_column, source_id_column, category_column, metadata_columns)
+        return self.__create_documents_from_dataframe__(df, content_column, source_id_column, category_column, metadata_columns)
     
     async def unload_documents_to_excel(
         self, file_path: str,
@@ -291,3 +389,47 @@ class CategoryBatchClient:
             name_list = df[name_column].astype(str).tolist()
      
         await self.embedding_client.delete_categories(name_list)
+
+
+class TagBatchClient:
+    def __init__(self, embedding_client: EmbeddingClient):
+        self.embedding_client = embedding_client
+
+    async def delete_tag_data_from_excel(
+        self, file_path: str, name_column: str
+    ):
+        df = pd.read_excel(file_path)
+        df.replace(to_replace=r"_x000D_", value="", regex=True, inplace=True)
+        name_list: list[str] = []
+        if name_column in df.columns:
+            name_list = df[name_column].astype(str).tolist()
+     
+        await self.embedding_client.delete_tags(name_list)
+
+    async def unload_tag_data_to_excel(
+        self, file_path: str
+    ):
+        # 全タグを取得してExcelに保存する
+        tag_list = await self.embedding_client.list_tags()
+        data = {
+            "name": [tag.name for tag in tag_list],
+            "description": [tag.description for tag in tag_list],
+        }
+        df = pd.DataFrame(data)
+        df.to_excel(file_path, index=False)
+
+    async def load_tag_data_from_excel(
+        self, file_path: str, name_column: str, description_column: str
+    ):
+        df = pd.read_excel(file_path)
+        df.replace(to_replace=r"_x000D_", value="", regex=True, inplace=True)
+        tag_list: list[TagData] = []
+        for _, row in df.iterrows():
+            name = row.get(name_column, "")
+            description = row.get(description_column, "")
+            if not name:
+                continue
+            tag = TagData(name=str(name), description=str(description))
+            tag_list.append(tag)
+    
+        await self.embedding_client.update_tags(tag_list)
