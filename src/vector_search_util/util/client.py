@@ -8,9 +8,6 @@ from tqdm.asyncio import tqdm_asyncio
 import pandas as pd
 from pandas import DataFrame
 
-
-from langchain_core.documents import Document
-
 from vector_search_util.langchain.langchain_vector_db import LangChainVectorDB
 from vector_search_util.langchain.models import EmbeddingData
 from vector_search_util.llm.embedding_config import EmbeddingConfig
@@ -250,7 +247,7 @@ class EmbeddingClient:
         self.category_db_path: str = os.path.join(self.config.app_data_path, "vector_db_search_app.db")
         self.sqlite_client = SQLiteClient(self.category_db_path)
 
-    async def vector_search(self, query: str, category: str = "", filter: dict[str, list[str]] ={}, top_k: int = 5) -> list[Document]:
+    async def vector_search(self, query: str, category: str = "", filter: dict[str, list[str]] ={}, top_k: int = 5) -> list[EmbeddingData]:
         results = await self.vector_db.vector_search(query, category, filter, top_k)
         return results
 
@@ -259,7 +256,7 @@ class EmbeddingClient:
             source_ids: list[str] = [], 
             category_ids: list[str] = [], 
             tags: dict[str, list[str]] ={}
-            ) -> tuple[list[str], list[Document]]:
+            ) -> tuple[list[str], list[EmbeddingData]]:
         if source_ids:
             tags[self.config.source_id_key] = source_ids
         if category_ids:
@@ -365,7 +362,7 @@ class EmbeddingBatchClient:
             if not content or not source_id:
                 continue
             metadata = {key: row.get(key, "") for key in metadata_columns}
-            data = EmbeddingData(content=str(content), source_id=str(source_id), category=str(category), metadata=metadata)
+            data = EmbeddingData(page_content=str(content), source_id=str(source_id), category=str(category), metadata=metadata)
             data_list.append(data)
         return data_list
 
@@ -395,11 +392,11 @@ class EmbeddingBatchClient:
     ):
         _, documents = await self.embedding_client.vector_db.get_documents(tags)
         keys = set()
-        keys.add("content")
+        keys.add("page_content")
         data_list = []
         for document in documents:
             data = {
-                "content": document.page_content,
+                "page_content": document.page_content,
             }
             keys.update(document.metadata.keys())
             data.update(document.metadata)

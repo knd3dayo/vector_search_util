@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Tuple, List, Any, Optional, Sequence
-import asyncio, os
+import asyncio, os, json
 
 from pydantic import Field
 from langchain_core.documents import Document
@@ -17,10 +17,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 
 from openai import RateLimitError
-
-from vector_search_util.langchain.langchain_client import LangchainClient
 from vector_search_util.langchain.models import EmbeddingData
 
+
+from vector_search_util.langchain.langchain_client import LangchainClient
 import vector_search_util.log.log_settings as log_settings
 logger = log_settings.getLogger(__name__)
 
@@ -36,7 +36,7 @@ class LangChainVectorDB(ABC):
 
     @abstractmethod
     # document_idのリストとmetadataのリストを返す
-    def _get_documents_(self, tags: dict[str, list[str]]) -> Tuple[List[str], List[Document]]:
+    def _get_documents_(self, tags: dict[str, list[str]]) -> Tuple[List[str], List[EmbeddingData]]:
         pass
 
     @abstractmethod
@@ -60,7 +60,7 @@ class LangChainVectorDB(ABC):
     ########################################
     # パブリック
     ########################################
-    async def get_documents(self, tags: dict[str, list[str]] ={}) -> Tuple[List[str], List[Document]]:
+    async def get_documents(self, tags: dict[str, list[str]] ={}) -> Tuple[List[str], List[EmbeddingData]]:
 
         return self._get_documents_(tags)
     
@@ -84,7 +84,7 @@ class LangChainVectorDB(ABC):
 
             # Documentを作成
             document = Document(
-                page_content=data.content,
+                page_content=data.page_content,
                 metadata=data.metadata
             )
             documents.append(document)
@@ -137,7 +137,7 @@ class LangChainVectorDB(ABC):
                 logger.error(f"Error adding documents: {e}")
                 break
 
-    async def vector_search(self, query: str, category: str = "", filter: dict[str, list[str]] = {}, k: int = 5) -> List[Document]:
+    async def vector_search(self, query: str, category: str = "", filter: dict[str, list[str]] = {}, k: int = 5) -> List[EmbeddingData]:
         """
         ベクトルDBからドキュメントを検索する。
         :param query: 検索クエリ
@@ -158,15 +158,21 @@ class LangChainVectorDB(ABC):
         docs_and_scores = self.db.similarity_search_with_relevance_scores(query, **search_kwargs)
         # documentのmetadataにscoreを追加
         doc_ids: set[str] = set()
-        documents: List[Document] = []
+        embedding_data_list: List[EmbeddingData] = []
         for doc, score in docs_and_scores:
             doc.metadata["score"] = score
-            documents.append(doc)
+            embedding_data = EmbeddingData(
+                source_id=doc.metadata.get(self.client.llm_config.source_id_key, ""),
+                page_content=doc.page_content,
+                metadata=doc.metadata,
+                category=doc.metadata.get(self.client.llm_config.category_key, "")
+            )
+            embedding_data_list.append(embedding_data)
             doc_id = doc.metadata.get("doc_id", None)
             if doc_id is not None:
                 doc_ids.add(doc_id)
 
-        return documents
+        return embedding_data_list  
 
 class LangChainVectorDBChroma(LangChainVectorDB):
 
@@ -221,7 +227,7 @@ class LangChainVectorDBChroma(LangChainVectorDB):
         search_kwargs["filter"] = filter
         return search_kwargs
 
-    def _get_documents_(self, tags: dict[str, list[str]]) -> Tuple[List[str], List[Document]]:
+    def _get_documents_(self, tags: dict[str, list[str]]) -> Tuple[List[str], List[EmbeddingData]]:
         ids=[]
         logger.debug(f"tags:{tags}")
         # K(key).is_in(value) & 条件 & ...の形の文を作成
@@ -238,10 +244,18 @@ class LangChainVectorDBChroma(LangChainVectorDB):
         # vector idを取得してidsに追加
         ids.extend(doc_dict.get("ids", []))
         content_list = doc_dict.get("documents", [])
-        metadata_list = doc_dict.get("metadatas", [])
+        metadata_list: list[dict[str, Any]] = doc_dict.get("metadatas", [])
+        source_id_key = self.client.llm_config.source_id_key
+        category_key = self.client.llm_config.category_key
 
-        documents = [Document(page_content=content, metadata=metadata) for content, metadata in zip(content_list, metadata_list)]
-
+        documents = [
+            EmbeddingData(
+                page_content=content, 
+                source_id=metadata.get(source_id_key, ""),
+                category=metadata.get(category_key, ""),
+                metadata=metadata
+                )  for content, metadata in zip(content_list, metadata_list)
+            ]
         return ids, documents
 
     
@@ -282,7 +296,7 @@ class LangChainVectorDBPGVector(LangChainVectorDB):
         return search_kwargs
     
 
-    def _get_documents_(self, tags: dict[str, list[str]] = {}) -> Tuple[List[str], List[Document]]:
+    def _get_documents_(self, tags: dict[str, list[str]] = {}) -> Tuple[List[str], List[EmbeddingData]]:
         engine = sqlalchemy.create_engine(self.vector_db_url)
         with Session(engine) as session:
             stmt = text("SELECT uuid FROM langchain_pg_collection WHERE name=:name").bindparams(name=self.collection_name)
@@ -320,6 +334,18 @@ class LangChainVectorDBPGVector(LangChainVectorDB):
                 logger.error(f"Query execution failed: {e}")
                 return ([], [])
 
-            document_ids = [row[0] for row in rows]
-            document_list = [Document(page_content=row[1], metadata=row[2]) for row in rows]
-            return (document_ids, document_list)
+            EmbeddingData_list: list[EmbeddingData] = []
+            ids: list[str] = []
+            for row in rows:
+                ids.append(row[0])
+                content = row[1]
+                cmetadata_dict = json.loads(row[2])
+                embedding_data = EmbeddingData(
+                    page_content=content, 
+                    source_id=cmetadata_dict.get(self.client.llm_config.source_id_key, ""),
+                    category=cmetadata_dict.get(self.client.llm_config.category_key, ""),
+                    metadata=cmetadata_dict
+                )
+                EmbeddingData_list.append(embedding_data)
+
+            return ids, EmbeddingData_list

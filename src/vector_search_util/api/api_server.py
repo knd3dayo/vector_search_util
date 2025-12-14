@@ -1,6 +1,5 @@
 from typing import Annotated
 from fastapi import FastAPI
-from langchain_core.documents import Document
 from vector_search_util.util.client import EmbeddingClient, EmbeddingData, CategoryData, RelationData, TagData
 from vector_search_util.llm.embedding_config import EmbeddingConfig
 
@@ -12,7 +11,7 @@ async def vector_search(
     category: Annotated[str, "The category to filter the search by."] = "",
     filter: Annotated[dict[str, list[str]], "A dictionary of tags to filter the search by. eg { \"key\": [\"value1\", \"value2\"] }"] = {},
     num_results: Annotated[int, "The number of results to return."] = 5,
-) -> list[Document]:
+) -> list[EmbeddingData]:
     
     """Perform a vector search in the vector database.
 
@@ -36,7 +35,7 @@ async def get_documents(
     source_ids: Annotated[list[str], "A list of source IDs of documents to retrieve."] = [],
     category_ids: Annotated[list[str], "A list of category IDs to filter documents by."] = [],
     tags: Annotated[dict[str, list[str]], "A dictionary of tags to filter documents by. eg { \"key\": [\"value1\", \"value2\"] }"] = {},
-) -> list[Document]:
+) -> list[EmbeddingData]:
     """Retrieve documents from the vector database based on a list of source IDs.
 
     Args:
@@ -44,7 +43,7 @@ async def get_documents(
         category_ids (list[str]): A list of category IDs to filter documents by.
         tags (dict[str, list[str]]): A dictionary of tags to filter documents by. eg { "key": ["value1", "value2"] }
     Returns:
-        list[Document]: A list of documents retrieved from the vector database.
+        list[EmbeddingData]: A list of documents retrieved from the vector database.
     """
     config = EmbeddingConfig()
     embedding_client = EmbeddingClient(config)
