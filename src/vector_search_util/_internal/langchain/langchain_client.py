@@ -2,9 +2,9 @@ from langchain_core.embeddings import Embeddings
 
 from langchain_openai import AzureOpenAIEmbeddings
 from langchain_openai import OpenAIEmbeddings
-from vector_search_util.llm.embedding_config import EmbeddingConfig
+from vector_search_util.model import EmbeddingConfig
 
-import vector_search_util.log.log_settings as log_settings
+import vector_search_util._internal.log.log_settings as log_settings
 logger = log_settings.getLogger(__name__)
 
 class LangchainClient:

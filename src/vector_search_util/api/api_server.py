@@ -1,9 +1,47 @@
 from typing import Annotated
 from fastapi import FastAPI
-from vector_search_util.util.client import EmbeddingClient, EmbeddingData, CategoryData, RelationData, TagData
-from vector_search_util.llm.embedding_config import EmbeddingConfig
-from vector_search_util.langchain.condition import ConditionContainer
+from langchain_core.documents import Document
+from vector_search_util.core.client import (
+    EmbeddingClient, EmbeddingBatchClient, RelationBatchClient, CategoryBatchClient, TagBatchClient
+)   
+from vector_search_util.model import EmbeddingConfig, ConditionContainer, EmbeddingData, CategoryData, RelationData, TagData
+
 app = FastAPI()
+
+# vector searchでLangChainのDocumentsを返すAPI
+@app.get("/vector_search_langchain_documents", response_model=list)
+async def vector_search_langchain_documents(
+    query: Annotated[str, "The search query string."],
+    category: Annotated[str, "The category to filter the search by."] = "",
+    filter: Annotated[ConditionContainer, "A dictionary of tags to filter the search by. "] = ConditionContainer(),
+    num_results: Annotated[int, "The number of results to return."] = 5,
+) -> list[Document]:
+    
+    """Perform a vector search in the vector database and return Langchain Documents.
+
+    Args:
+        query (str): The search query string.
+        category (str | None): The category to filter the search by.
+        filter (ConditionContainer): A dictionary of tags to filter the search by.
+        num_results (int): The number of results to return.
+
+    Returns:
+        list: A list of Langchain Documents as search results.
+    """
+    embedding_client = EmbeddingClient()
+    results = await embedding_client.vector_search_langchain_documents(query, category, filter, num_results)
+    return results
+
+@app.get("/get_langchain_documents", response_model=list)
+async def get_langchain_documents(
+    source_ids: Annotated[list[str], "A list of source IDs of documents to retrieve."] = [],
+    category_ids: Annotated[list[str], "A list of category IDs to filter documents by."] = [],
+    filter: Annotated[ConditionContainer, "A dictionary of tags to filter documents by. "] = ConditionContainer(),
+) -> list[Document]:
+    embedding_client = EmbeddingClient()
+    _, documents = await embedding_client.get_langchain_documents(source_ids, category_ids, filter)
+    return documents
+
 
 @app.get("/vector_search", response_model=list)
 async def vector_search(
@@ -24,8 +62,7 @@ async def vector_search(
     Returns:
         list: A list of search results.
     """
-    config = EmbeddingConfig()
-    embedding_client = EmbeddingClient(config)
+    embedding_client = EmbeddingClient()
     results = await embedding_client.vector_search(query, category, filter, num_results)
     return results
 
@@ -214,6 +251,134 @@ async def delete_tags(
     config = EmbeddingConfig()
     embedding_client = EmbeddingClient(config)
     await embedding_client.delete_tags(name_list)
+
+@app.post("/load_documents_from_excel")
+async def load_documents_from_excel(
+        file_path: Annotated[str, "The path to the Excel file."],
+        content_column: Annotated[str, "The name of the column containing document content."] = "content",
+        source_id_column: Annotated[str, "The name of the column containing source IDs."] = "source_id",
+        category_column: Annotated[str, "The name of the column containing categories."] = "category",
+        metadata_columns: Annotated[list[str], "A list of column names to include as metadata."] = []
+    ):
+    """Load documents from an Excel file into the vector database.
+
+    Args:
+        file_path (str): The path to the Excel file.
+        content_column (str): The name of the column containing document content.
+        source_id_column (str): The name of the column containing source IDs.
+        category_column (str): The name of the column containing categories.
+        metadata_columns (list[str]): A list of column names to include as metadata.
+    """
+
+    embedding_client = EmbeddingClient()
+    batch_client = EmbeddingBatchClient(embedding_client)
+    await batch_client.load_documents_from_excel(
+        file_path, content_column, source_id_column, category_column, metadata_columns
+    )
+
+@app.get("/unload_documents_to_excel")
+async def unload_documents_to_excel(
+        file_path: Annotated[str, "The path to the output Excel file."]
+    ):
+    """Unload documents from the vector database to an Excel file.
+
+    Args:
+        file_path (str): The path to the output Excel file.
+    """
+
+    embedding_client = EmbeddingClient()
+    batch_client = EmbeddingBatchClient(embedding_client)
+    await batch_client.unload_documents_to_excel(file_path)
+
+@app.delete("/delete_documents_from_excel")
+async def delete_documents_from_excel(
+        file_path: Annotated[str, "The path to the Excel file."],
+        source_id_column: Annotated[str, "The name of the column containing source IDs."] = "source_id",
+        category_column: Annotated[str, "The name of the column containing categories."] = "category",
+        metadata_columns: Annotated[dict[str, list[str]], "A list of column names to include as metadata."] = {}
+    ):
+    """Delete documents from the vector database based on an Excel file.
+
+    Args:
+        file_path (str): The path to the Excel file.
+        source_id_column (str): The name of the column containing source IDs.
+        category_column (str): The name of the column containing categories.
+        metadata_columns (list[str]): A list of column names to include as metadata.
+    """
+
+    embedding_client = EmbeddingClient()
+    batch_client = EmbeddingBatchClient(embedding_client)
+    await batch_client.delete_documents_from_excel(
+        file_path, source_id_column, category_column, metadata_columns
+    )
+
+@app.post("/load_categories_from_excel")
+async def load_categories(
+        input_file_path: str, name_column: str, description_column: str
+    ):
+    embedding_client = EmbeddingClient()
+    batch_client = CategoryBatchClient(embedding_client)
+    
+    await batch_client.load_category_data_from_excel(
+        input_file_path, name_column, description_column
+    )
+
+@app.get("/unload_categories_to_excel")
+async def unload_categories(output_file: str):
+
+    embedding_client = EmbeddingClient()
+    batch_client = CategoryBatchClient(embedding_client)
+    await batch_client.unload_category_data_to_excel(output_file)
+
+@app.post("/load_relations_from_excel")
+async def load_relations_from_excel(input_file_path: str, from_node_column: str, to_node_column: str, edge_type_column: str):
+    embedding_client = EmbeddingClient()
+    batch_client = RelationBatchClient(embedding_client)
+    
+    await batch_client.load_relation_data_from_excel(
+        input_file_path, from_node_column, to_node_column, edge_type_column
+    )
+@app.get("/unload_relations_to_excel")
+async def unload_relations_to_excel(output_file: str):
+
+    embedding_client = EmbeddingClient()
+    batch_client = RelationBatchClient(embedding_client)
+    await batch_client.unload_relation_data_to_excel(output_file)
+
+@app.delete("/delete_relations_from_excel")
+async def delete_relations_from_excel(input_file_path: str, from_node_column: str, to_node_column: str, edge_type_column: str):
+    embedding_client = EmbeddingClient()
+    batch_client = RelationBatchClient(embedding_client)
+    await batch_client.delete_relation_data_from_excel(input_file_path, from_node_column, to_node_column, edge_type_column)
+
+@app.post("/load_tags_from_excel")
+async def load_tags_from_excel(input_file_path, name_column, description_column):
+    config = EmbeddingConfig()
+    embedding_client = EmbeddingClient(config)
+    batch_client = TagBatchClient(embedding_client)
+    
+    await batch_client.load_tag_data_from_excel(
+        input_file_path, name_column, description_column
+    )
+
+@app.get("/unload_tags_to_excel")
+async def unload_tags_from_excel(output_file: str):
+
+    config = EmbeddingConfig()
+    embedding_client = EmbeddingClient(config)
+    batch_client = TagBatchClient(embedding_client)
+    await batch_client.unload_tag_data_to_excel(output_file)
+
+@app.delete("/delete_tags_from_excel")
+async def delete_tags_from_excel(input_file_path: str, name_column: str):
+
+    config = EmbeddingConfig()
+    embedding_client = EmbeddingClient(config)
+    batch_client = TagBatchClient(embedding_client)
+    await batch_client.delete_tag_data_from_excel(input_file_path, name_column)
+
+
+
 
 # ping endpoint
 @app.get("/ping")

@@ -17,12 +17,11 @@ from sqlalchemy.orm import Session
 from sqlalchemy.sql import text
 
 from openai import RateLimitError
-from vector_search_util.langchain.models import EmbeddingData
-from vector_search_util.langchain.condition import Condition, EqCondition, InCondition, ContainsCondition, CompareCondition, AndCondition, OrCondition, NotCondition, ConditionContainer
+from vector_search_util.model import ConditionContainer
 
 
-from vector_search_util.langchain.langchain_client import LangchainClient
-import vector_search_util.log.log_settings as log_settings
+from vector_search_util._internal.langchain.langchain_client import LangchainClient
+import vector_search_util._internal.log.log_settings as log_settings
 logger = log_settings.getLogger(__name__)
 
 
@@ -37,7 +36,7 @@ class LangChainVectorDB(ABC):
 
     @abstractmethod
     # document_idのリストとmetadataのリストを返す
-    def _get_documents_(self, conditions: ConditionContainer = ConditionContainer()) -> Tuple[List[str], List[EmbeddingData]]:
+    def _get_documents_(self, conditions: ConditionContainer = ConditionContainer()) -> Tuple[List[str], List[Document]]:
         pass
 
     def _create_search_kwargs_(self, k: int, conditions: ConditionContainer = ConditionContainer()) -> dict[str, Any]:
@@ -63,34 +62,16 @@ class LangChainVectorDB(ABC):
     ########################################
     # パブリック
     ########################################
-    async def get_documents(self, conditions: ConditionContainer = ConditionContainer()) -> Tuple[List[str], List[EmbeddingData]]:
+    async def get_documents(self, conditions: ConditionContainer = ConditionContainer()) -> Tuple[List[str], List[Document]]:
 
         return self._get_documents_(conditions)
     
 
-    async def add_documents(self, data_list: list[EmbeddingData]):
+    async def add_documents(self, documents: list[Document]):
 
         if self.db is None:
             raise ValueError("db is None")
  
-        source_id_key = self.client.llm_config.source_id_key
-        category_key = self.client.llm_config.category_key
-        documents: list[Document] = []
-        for data in data_list:
-            # metadataにsource_idがない場合は追加する
-            if source_id_key not in data.metadata.keys():
-                data.metadata[source_id_key] = data.source_id
-
-            # categoryが指定されている場合はmetadataに追加する
-            if data.category and category_key not in data.metadata.keys():
-                data.metadata[category_key] = data.category
-
-            # Documentを作成
-            document = Document(
-                page_content=data.page_content,
-                metadata=data.metadata
-            )
-            documents.append(document)
         await self.add_doucment_with_retry(self.db, documents)
 
     async def delete_documents_by_ids(self, doc_ids:list=[]):
@@ -112,11 +93,11 @@ class LangChainVectorDB(ABC):
             return
         await self.delete_documents_by_ids(vector_ids)
 
-    async def upsert_documents(self, data_list: list[EmbeddingData]):
+    async def upsert_documents(self, data_list: list[Document]):
         
         # 既に存在するドキュメントを削除
         conditions = ConditionContainer().add_in_condition(
-            self.client.llm_config.source_id_key, [ data.source_id for data in data_list ]
+            self.client.llm_config.source_id_key, [ data.metadata.get(self.client.llm_config.source_id_key, "") for data in data_list ]
             )
         await self.delete_documents_by_tags(conditions)
 
@@ -141,7 +122,7 @@ class LangChainVectorDB(ABC):
                 logger.error(f"Error adding documents: {e}")
                 break
 
-    async def vector_search(self, query: str, category: str = "", conditions: ConditionContainer = ConditionContainer(), k: int = 5) -> List[EmbeddingData]:
+    async def vector_search(self, query: str, category: str = "", conditions: ConditionContainer = ConditionContainer(), k: int = 5) -> List[Document]:
         """
         ベクトルDBからドキュメントを検索する。
         :param query: 検索クエリ
@@ -161,21 +142,15 @@ class LangChainVectorDB(ABC):
         docs_and_scores = self.db.similarity_search_with_relevance_scores(query, **search_kwargs)
         # documentのmetadataにscoreを追加
         doc_ids: set[str] = set()
-        embedding_data_list: List[EmbeddingData] = []
+        documents: List[Document] = []
         for doc, score in docs_and_scores:
             doc.metadata["score"] = score
-            embedding_data = EmbeddingData(
-                source_id=doc.metadata.get(self.client.llm_config.source_id_key, ""),
-                page_content=doc.page_content,
-                metadata=doc.metadata,
-                category=doc.metadata.get(self.client.llm_config.category_key, "")
-            )
-            embedding_data_list.append(embedding_data)
+            documents.append(doc)
             doc_id = doc.metadata.get("doc_id", None)
             if doc_id is not None:
                 doc_ids.add(doc_id)
 
-        return embedding_data_list  
+        return documents  
 
 class LangChainVectorDBChroma(LangChainVectorDB):
 
@@ -213,7 +188,7 @@ class LangChainVectorDBChroma(LangChainVectorDB):
         self.db = db
 
 
-    def _get_documents_(self, conditions: ConditionContainer = ConditionContainer()) -> Tuple[List[str], List[EmbeddingData]]:
+    def _get_documents_(self, conditions: ConditionContainer = ConditionContainer()) -> Tuple[List[str], List[Document]]:
         ids=[]
         logger.debug(f"conditions:{conditions}")
         
@@ -234,13 +209,11 @@ class LangChainVectorDBChroma(LangChainVectorDB):
         category_key = self.client.llm_config.category_key
 
         documents = [
-            EmbeddingData(
+            Document(
                 page_content=content, 
-                source_id=metadata.get(source_id_key, ""),
-                category=metadata.get(category_key, ""),
                 metadata=metadata
-                )  for content, metadata in zip(content_list, metadata_list)
-            ]
+            )  for content, metadata in zip(content_list, metadata_list)
+        ]   
         return ids, documents
 
     
@@ -266,7 +239,7 @@ class LangChainVectorDBPGVector(LangChainVectorDB):
             )
         self.db = db
 
-    def _get_documents_(self, conditions: Optional[ConditionContainer] = None) -> Tuple[List[str], List[EmbeddingData]]:
+    def _get_documents_(self, conditions: Optional[ConditionContainer] = None) -> Tuple[List[str], List[Document]]:
         engine = sqlalchemy.create_engine(self.vector_db_url)
         with Session(engine) as session:
             stmt = text("SELECT uuid FROM langchain_pg_collection WHERE name=:name").bindparams(name=self.collection_name)
@@ -297,18 +270,16 @@ class LangChainVectorDBPGVector(LangChainVectorDB):
                 logger.error(f"Query execution failed: {e}")
                 return ([], [])
 
-            EmbeddingData_list: list[EmbeddingData] = []
+            documents: list[Document] = []
             ids: list[str] = []
             for row in rows:
                 ids.append(row[0])
                 content = row[1]
                 cmetadata_dict = json.loads(row[2])
-                embedding_data = EmbeddingData(
+                doc = Document(
                     page_content=content, 
-                    source_id=cmetadata_dict.get(self.client.llm_config.source_id_key, ""),
-                    category=cmetadata_dict.get(self.client.llm_config.category_key, ""),
                     metadata=cmetadata_dict
                 )
-                EmbeddingData_list.append(embedding_data)
+                documents.append(doc)
 
-            return ids, EmbeddingData_list
+            return ids, documents

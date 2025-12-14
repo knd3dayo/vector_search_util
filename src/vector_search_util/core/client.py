@@ -1,243 +1,24 @@
 import asyncio
-import aiosqlite
-import sqlite3
 import os
 from typing import Any, Optional
-from pydantic import BaseModel
 from tqdm.asyncio import tqdm_asyncio
 import pandas as pd
 from pandas import DataFrame
+from langchain_core.documents import Document
+from vector_search_util.model import (
+    CategoryData, RelationData, TagData, ConditionContainer, EmbeddingConfig, EmbeddingData, SourceDocumentData
+)
+from vector_search_util._internal.db import SQLiteClient
 
-from vector_search_util.langchain.langchain_vector_db import LangChainVectorDB
-from vector_search_util.langchain.models import EmbeddingData
-from vector_search_util.llm.embedding_config import EmbeddingConfig
-from vector_search_util.langchain.langchain_client import LangchainClient
-from vector_search_util.langchain.condition import ConditionContainer
-# category_data
-class CategoryData(BaseModel):
-    name: str
-    description: str
+from vector_search_util._internal.langchain.langchain_vector_db import LangChainVectorDB
+from vector_search_util._internal.langchain.langchain_client import LangchainClient
 
-# relation_data
-class RelationData(BaseModel):
-    # Relationの各フィールド。空文字は禁止
-    from_node: str
-    to_node: str
-    edge_type: str
+import vector_search_util._internal.log.log_settings as log_settings
+logger = log_settings.getLogger(__name__)
 
-    def is_valid(self) -> bool:
-        # すべてのフィールドが非空文字列であることを確認
-        return all([self.from_node, self.to_node, self.edge_type])
-
-# tag_data
-class TagData(BaseModel):
-    name: str
-    description: str
-
-# sqlite3
-class SQLiteClient:
-    initialized: bool = False
-    def __init__(self, db_path: str):
-        self.db_path = db_path
-        if not SQLiteClient.initialized:
-            dirname = os.path.dirname(self.db_path)
-            if not os.path.exists(dirname):
-                os.makedirs(dirname)
-            SQLiteClient.initialized = True
-            self.create_categories_table()
-            self.create_tags_table()
-            self.create_relations_table()
-
-    def create_categories_table(self):
-        # DBPropertiesテーブルが存在しない場合は作成する
-        with sqlite3.connect(self.db_path) as conn:
-            cur = conn.cursor()
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS categories (
-                    name TEXT NOT NULL PRIMARY KEY,
-                    description TEXT NOT NULL
-                )
-            ''')
-            conn.commit()
-
-    # Category間のリレーションを管理するテーブル
-    def create_relations_table(self):
-        with sqlite3.connect(self.db_path) as conn:
-            cur = conn.cursor()
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS relations (
-                    from_node TEXT NOT NULL,
-                    to_node TEXT NOT NULL,
-                    edge_type TEXT NOT NULL,
-                    PRIMARY KEY (from_node, to_node, edge_type),
-                    FOREIGN KEY (from_node) REFERENCES categories(name),
-                    FOREIGN KEY (to_node) REFERENCES categories(name)
-                )
-            ''')
-            conn.commit()
-
-    def create_tags_table(self):
-        # DBPropertiesテーブルが存在しない場合は作成する
-        with sqlite3.connect(self.db_path) as conn:
-            cur = conn.cursor()
-            cur.execute('''
-                CREATE TABLE IF NOT EXISTS tags (
-                    name TEXT NOT NULL,
-                    description TEXT,
-                    PRIMARY KEY (name)
-                )
-            ''')
-            conn.commit()
-
-    async def get_categories(self, names: list[str] = []) -> list[CategoryData]:
-        conditions = []
-        if names:
-            conditions.append("name IN ({})".format(",".join("?" * len(names))))
-        query = "SELECT name, description FROM categories"
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-
-        async with aiosqlite.connect(self.db_path) as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(query, tuple(names))
-                rows = await cur.fetchall()
-                categories = [CategoryData(name=row[0], description=row[1]) for row in rows]
-                return categories
-
-    async def delete_categories(self, names: list[str]):
-        async with aiosqlite.connect(self.db_path) as conn:
-            async with conn.cursor() as cur:
-                await cur.executemany('''
-                    DELETE FROM categories WHERE name = ?
-                ''', [(name,) for name in names])
-            await conn.commit()
-
-    async def upsert_categories(self, category_list: list[CategoryData]):
-        async with aiosqlite.connect(self.db_path) as conn:
-            async with conn.cursor() as cur:
-                await cur.executemany('''
-                    INSERT INTO categories (name, description)
-                    VALUES (?, ?)
-                    ON CONFLICT(name) DO UPDATE SET description=excluded.description
-                ''', [(category.name, category.description) for category in category_list])
-            await conn.commit()
-    
-    async def delete_all_categories(self):
-        async with aiosqlite.connect(self.db_path) as conn:
-            async with conn.cursor() as cur:
-                await cur.execute('''
-                    DELETE FROM categories
-                ''')
-            await conn.commit()
-
-    async def upsert_new_categories(self, data_list_category_names_set: set[str]):
-        existing_category_names_set = set([category.name for category in await self.get_categories()])
-        new_category_names_set = data_list_category_names_set - existing_category_names_set
-        new_categories = [CategoryData(name=category_name, description="") for category_name in new_category_names_set]
-        if new_categories:
-            await self.upsert_categories(new_categories)
-
-    # relations関連
-    async def get_relations(
-            self, 
-            from_nodes: list[str] = [], 
-            to_nodes: list[str] = [], edge_types: list[str] = []
-            ) -> list[RelationData]:
-        conditions = []
-        if from_nodes:
-            conditions.append("from_node IN ({})".format(",".join("?" * len(from_nodes))))
-        if to_nodes:
-            conditions.append("to_node IN ({})".format(",".join("?" * len(to_nodes))))
-        if edge_types:
-            conditions.append("edge_type IN ({})".format(",".join("?" * len(edge_types))))
-
-        query = "SELECT from_node, to_node, edge_type FROM relations"
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-
-        async with aiosqlite.connect(self.db_path) as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(query, tuple(param for param in from_nodes + to_nodes + edge_types if param))
-                rows = await cur.fetchall()
-                relations = [RelationData(from_node=row[0], to_node=row[1], edge_type=row[2]) for row in rows]
-                return relations
-
-    async def upsert_relations(self, relations: list[RelationData]):
-        async with aiosqlite.connect(self.db_path) as conn:
-            async with conn.cursor() as cur:
-                await cur.executemany('''
-                    INSERT INTO relations (from_node, to_node, edge_type)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(from_node, to_node, edge_type) DO NOTHING
-                ''', [(relation.from_node, relation.to_node, relation.edge_type) for relation in relations if relation.is_valid()])
-            await conn.commit()
-
-    async def delete_relations(self, relations: list[RelationData]):
-        async with aiosqlite.connect(self.db_path) as conn:
-            async with conn.cursor() as cur:
-                await cur.executemany('''
-                    DELETE FROM relations WHERE from_node = ? AND to_node = ? AND edge_type = ?
-                ''', [(relation.from_node, relation.to_node, relation.edge_type) for relation in relations])
-            await conn.commit()
-
-    async def delete_all_relations(self):
-        async with aiosqlite.connect(self.db_path) as conn:
-            async with conn.cursor() as cur:
-                await cur.execute('''
-                    DELETE FROM relations
-                ''')
-            await conn.commit()
-
-    async def get_tags(self, names: list[str]) -> list[TagData]:
-        conditions = []
-        if names:
-            conditions.append("name IN ({})".format(",".join("?" * len(names))))
-        query = "SELECT name, description FROM tags"
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-
-        async with aiosqlite.connect(self.db_path) as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(query, tuple(names))
-                rows = await cur.fetchall()
-                tags = [TagData(name=row[0], description=row[1]) for row in rows]
-                return tags
-        
-    async def upsert_tags(self, tag_list: list[TagData]):
-        async with aiosqlite.connect(self.db_path) as conn:
-            async with conn.cursor() as cur:
-                await cur.executemany('''
-                    INSERT INTO tags (name, description)
-                    VALUES (?, ?)
-                    ON CONFLICT(name) DO UPDATE SET description=excluded.description
-                ''', [(tag.name, tag.description) for tag in tag_list])
-            await conn.commit()
-
-    async def delete_tags(self, names: list[str]):
-        async with aiosqlite.connect(self.db_path) as conn:
-            async with conn.cursor() as cur:
-                await cur.executemany('''
-                    DELETE FROM tags WHERE name = ?
-                ''', [(name,) for name in names])
-            await conn.commit()
-
-    async def delete_all_tags(self):
-        async with aiosqlite.connect(self.db_path) as conn:
-            async with conn.cursor() as cur:
-                await cur.execute('''
-                    DELETE FROM tags
-                ''')
-            await conn.commit()
-
-    async def upsert_new_tags(self, data_list_metadata_keys_set: set[str]):
-        existing = {t.name for t in await self.get_tags(list(data_list_metadata_keys_set))}
-        new_names = data_list_metadata_keys_set - existing
-        new_tags = [TagData(name=n, description="") for n in new_names]
-        if new_tags:
-            await self.upsert_tags(new_tags)
 
 class EmbeddingClient:
-    def __init__(self, config: EmbeddingConfig| None = None):
+    def __init__(self, config: EmbeddingConfig = EmbeddingConfig()):
         if config is None:
             config = EmbeddingConfig()
         self.config = config
@@ -247,9 +28,28 @@ class EmbeddingClient:
         self.category_db_path: str = os.path.join(self.config.app_data_path, "vector_db_search_app.db")
         self.sqlite_client = SQLiteClient(self.category_db_path)
 
-    async def vector_search(self, query: str, category: str = "", condition: ConditionContainer = ConditionContainer(), top_k: int = 5) -> list[EmbeddingData]:
+    async def vector_search_langchain_documents(self, query: str, category: str = "", condition: ConditionContainer = ConditionContainer(), top_k: int = 5) -> list[Document]:
         results = await self.vector_db.vector_search(query, category, condition, top_k)
         return results
+    
+    async def vector_search(self, query: str, category: str = "", condition: ConditionContainer = ConditionContainer(), top_k: int = 5) -> list[EmbeddingData]:
+        results = await self.vector_db.vector_search(query, category, condition, top_k)
+        return EmbeddingData.from_langchain_documents(results, self.sqlite_client .get_content_by_source_id)
+
+    async def get_langchain_documents(
+            self,
+            source_ids: list[str] = [],
+            category_ids: list[str] = [],
+            condition: ConditionContainer = ConditionContainer()
+            ) -> tuple[list[str], list[Document]]:
+
+        if source_ids:
+            condition.add_in_condition(self.config.source_id_key, source_ids)
+        if category_ids:
+            condition.add_in_condition(self.config.category_key, category_ids)
+
+        ids, results = await self.vector_db.get_documents(condition)
+        return ids, results
 
     async def get_documents(
             self, 
@@ -258,19 +58,18 @@ class EmbeddingClient:
             condition: ConditionContainer = ConditionContainer()
             ) -> tuple[list[str], list[EmbeddingData]]:
 
-        if source_ids:
-            condition.add_in_condition(self.config.source_id_key, source_ids)
-        if category_ids:
-            condition.add_in_condition(self.config.category_key, category_ids)
-
-        return await self.vector_db.get_documents(condition)
+        ids, results = await self.get_langchain_documents(source_ids, category_ids, condition)
+        return ids, EmbeddingData.from_langchain_documents(results, self.sqlite_client.get_content_by_source_id)
     
     async def upsert_documents(self, data_list: list[EmbeddingData]):
-        await self.vector_db.upsert_documents(data_list)
+        # source_documentsに新規ドキュメントがあれば追加
+        await self.sqlite_client.upsert_source_documents([SourceDocumentData.from_embedding_data(data) for data in data_list])
         # data_listのcategoryのsetを取得して、カテゴリDBに存在しない場合は追加する
         data_list_category_names_set = set([data.category for data in data_list if data.category is not None])
         # data_listのmetadataのkeyのsetを取得して、タグDBに存在しない場合は追加する
         data_list_metadata_keys_set = set([key for data in data_list for key in data.metadata.keys() if key is not None])
+
+        await self.vector_db.upsert_documents(EmbeddingData.to_langchain_documents(data_list))
 
         # metadataに新規カテゴリがあれば追加
         await self.sqlite_client.upsert_new_categories(data_list_category_names_set)
@@ -280,10 +79,12 @@ class EmbeddingClient:
 
     async def delete_documents_by_source_ids(self, source_id_list: list[str], condition: ConditionContainer = ConditionContainer()):
         condition.add_in_condition(self.config.source_id_key, source_id_list)
+        await self.sqlite_client.delete_source_documents(source_id_list)
         await self.vector_db.delete_documents_by_tags(condition)
 
     async def delete_all_documents(self):
         ids, _ = await self.vector_db.get_documents()
+        await self.sqlite_client.delete_all_source_documents()
         await self.vector_db.delete_documents_by_ids(ids)
     
     async def upsert_categories(self, categories: list[CategoryData]):
@@ -333,7 +134,6 @@ class EmbeddingClient:
     async def delete_all_tags(self):
         await self.sqlite_client.delete_all_tags()
 
-
 class EmbeddingBatchClient:
     def __init__(self, embedding_client: EmbeddingClient):
         self.embedding_client = embedding_client
@@ -364,12 +164,12 @@ class EmbeddingBatchClient:
             if not content or not source_id:
                 continue
             metadata = {key: row.get(key, "") for key in metadata_columns}
-            data = EmbeddingData(page_content=str(content), source_id=str(source_id), category=str(category), metadata=metadata)
+            data = EmbeddingData(source_content=str(content), source_id=str(source_id), category=str(category), metadata=metadata)
             data_list.append(data)
         return data_list
 
     async def delete_documents_from_excel(
-        self, file_path: str, source_id_column: str, tags: dict[str, Any] ={}
+        self, file_path: str, source_id_column: str, category_column: str, tags: dict[str, list[str]] ={}
     ):
         df = pd.read_excel(file_path)
         df.replace(to_replace=r"_x000D_", value="", regex=True, inplace=True)
@@ -377,19 +177,25 @@ class EmbeddingBatchClient:
         source_id_list: list[str] = []
         if source_id_column in df.columns:
             source_id_list = df[source_id_column].astype(str).tolist()
+        category_list: list[str] = []
+        if category_column in df.columns:
+            category_list = df[category_column].astype(str).tolist()
         # tagからConditionContainerを作成
         condition = ConditionContainer()
+        if category_list:
+            condition.add_in_condition(self.embedding_client.config.category_key, category_list)
         for key, values in tags.items():
             condition.add_in_condition(key, values)
         await self.embedding_client.delete_documents_by_source_ids(source_id_list, condition)
     
-    def load_documents_from_excel(
+    async def load_documents_from_excel(
         self, file_path: str, content_column: str, source_id_column: str, category_column: str, metadata_columns: list[str]
-    ) -> list[EmbeddingData]:
+    ):
         df = pd.read_excel(file_path)
         df.replace(to_replace=r"_x000D_", value="", regex=True, inplace=True)
         df.fillna("", inplace=True)
-        return self.__create_documents_from_dataframe__(df, content_column, source_id_column, category_column, metadata_columns)
+        data_list = self.__create_documents_from_dataframe__(df, content_column, source_id_column, category_column, metadata_columns)
+        await self.update(data_list)
     
     async def unload_documents_to_excel(
         self, file_path: str,
@@ -417,6 +223,7 @@ class EmbeddingBatchClient:
             df[key] = [data.get(key, "") for data in data_list]
 
         df.to_excel(file_path, index=False)
+
 
 class CategoryBatchClient:
     def __init__(self, embedding_client: EmbeddingClient):
