@@ -12,6 +12,8 @@ chroma-hnswlib
 chromadb
 
 
+# For API
+fastapi
 # For MCP
 fastmcp
 
@@ -23,3 +25,4 @@ xlsxwriter
 
 # sqlite
 aiosqlite
+

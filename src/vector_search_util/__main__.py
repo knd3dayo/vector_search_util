@@ -2,8 +2,7 @@ import argparse
 import sys
 import asyncio
 import json
-from vector_search_util.util import embedding_loader, search
-from vector_search_util.util import category_loader
+from vector_search_util.util import loader, searcher
 
 
 async def main():
@@ -57,6 +56,25 @@ async def main():
     category_delete_parser.add_argument("-i", "--input_file_path", type=str, help="Path to the Excel file containing category names to delete.")
     category_delete_parser.add_argument("-n", "--name_column", type=str, default="name", help="Name of the name column. default is 'name'.")
 
+    # list_relation サブコマンド
+    list_relation_parser = subparsers.add_parser("list_relation", help="List all relations in the vector DB.")
+    # load_relation サブコマンド
+    relation_load_parser = subparsers.add_parser("load_relation", help="Load relations from Excel file to vector DB.")
+    relation_load_parser.add_argument("-i", "--input_file_path", type=str, help="Path to the Excel file.")
+    relation_load_parser.add_argument("--from_node_column", type=str, default="from_node", help="Name of the from_node column. default is 'from_node'.")
+    relation_load_parser.add_argument("--to_node_column", type=str, default="to_node", help="Name of the to_node column. default is 'to_node'.")
+    relation_load_parser.add_argument("--edge_type_column", type=str, default="edge_type", help="Name of the edge_type column. default is 'edge_type'.")
+    # unload_relation サブコマンド
+    relation_unload_parser = subparsers.add_parser("unload_relation", help="Unload relations from vector DB to Excel file.")
+    relation_unload_parser.add_argument("-o", "--output_file", type=str, help="Path to output file for unloaded relations.")
+    relation_unload_parser.add_argument("-f", "--filter_file", type=str, help="Path to JSON file containing filter conditions.")
+    # delete_relation サブコマンド
+    relation_delete_parser = subparsers.add_parser("delete_relation", help="Delete relations from vector DB.")
+    relation_delete_parser.add_argument("-i", "--input_file_path", type=str, help="Path to the Excel file containing relations to delete.")
+    relation_delete_parser.add_argument("--from_node_column", type=str, default="from_node", help="Name of the from_node column. default is 'from_node'.")
+    relation_delete_parser.add_argument("--to_node_column", type=str, default="to_node", help="Name of the to_node column. default is 'to_node'.")
+    relation_delete_parser.add_argument("--edge_type_column", type=str, default="edge_type", help="Name of the edge_type column. default is 'edge_type'.")
+
     # list tag サブコマンド
     list_tag_parser = subparsers.add_parser("list_tag", help="List all tags in the vector DB.")
 
@@ -94,7 +112,7 @@ async def main():
         if filter_file:
             filter_data = json.load(open(filter_file, "r", encoding="utf-8"))
 
-        results = await search.vector_search(query, category, filter_data, num_results)
+        results = await searcher.vector_search(query, category, filter_data, num_results)
         # 結果出力
         print("\n=== Search Results ===")
         for i, doc in enumerate(results, start=1):
@@ -111,7 +129,7 @@ async def main():
         source_id_column = args.source_id_column
         category_column = args.category_column
         metadata_columns = args.metadata_columns
-        await embedding_loader.load_documents_from_excel(file_path, content_column, source_id_column, category_column, metadata_columns)
+        await loader.load_documents_from_excel(file_path, content_column, source_id_column, category_column, metadata_columns)
 
     elif args.command == "unload_data":
         output_file = args.output_file
@@ -122,7 +140,7 @@ async def main():
         tags = {}
         if filter_file:
             tags = json.load(open(filter_file, "r", encoding="utf-8"))
-        await embedding_loader.unload_documents_to_excel(output_file, tags)
+        await loader.unload_documents_to_excel(output_file, tags)
 
     elif args.command == "delete_data":
         input_file_path = args.input_file_path
@@ -134,10 +152,10 @@ async def main():
         tags = {}
         if filter_file:
             tags = json.load(open(filter_file, "r", encoding="utf-8"))
-        await embedding_loader.delete_documents_from_excel(input_file_path, source_id_column, tags)
+        await loader.delete_documents_from_excel(input_file_path, source_id_column, tags)
 
     elif args.command == "list_category":
-        categories = await category_loader.list_categories()
+        categories = await loader.list_categories()
         print("\n=== Categories in Vector DB ===")
         for i, cat in enumerate(categories, start=1):
             print(f"[{i}] Name: {cat.name}, Description: {cat.description}")
@@ -149,14 +167,14 @@ async def main():
             sys.exit(1)
         name_column = args.name_column
         description_column = args.description_column
-        await category_loader.load_categories(input_file_path, name_column, description_column)
+        await loader.load_categories(input_file_path, name_column, description_column)
 
     elif args.command == "unload_category":
         output_file = args.output_file
         if not output_file:
             category_unload_parser.print_help()
             sys.exit(1)
-        await category_loader.unload_categories(output_file)
+        await loader.unload_categories(output_file)
 
     elif args.command == "delete_category":
         input_file_path = args.input_file_path
@@ -164,38 +182,64 @@ async def main():
             category_delete_parser.print_help()
             sys.exit(1)
         name_column = args.name_column
-        await category_loader.delete_categories(input_file_path, name_column)
+        await loader.delete_categories(input_file_path, name_column)
+
+    elif args.command == "list_relation":
+        relations = await loader.list_relations()
+        print("\n=== Relations in Vector DB ===")
+        for i, relation in enumerate(relations, start=1):
+            print(f"[{i}] From: {relation.from_node}, To: {relation.to_node}, Edge Type: {relation.edge_type}")
+    elif args.command == "load_relation":
+        input_file_path = args.input_file_path
+        if not input_file_path:
+            relation_load_parser.print_help()
+            sys.exit(1)
+        from_node_column = args.from_node_column
+        to_node_column = args.to_node_column
+        edge_type_column = args.edge_type_column
+        await loader.load_relations(input_file_path, from_node_column, to_node_column, edge_type_column)
+    elif args.command == "unload_relation":
+        output_file = args.output_file
+        if not output_file:
+            relation_unload_parser.print_help()
+            sys.exit(1)
+        await loader.unload_relations(output_file)
+    elif args.command == "delete_relation":
+        input_file_path = args.input_file_path
+        if not input_file_path:
+            relation_delete_parser.print_help()
+            sys.exit(1)
+        from_node_column = args.from_node_column
+        to_node_column = args.to_node_column
+        edge_type_column = args.edge_type_column
+        await loader.delete_relations(input_file_path, from_node_column, to_node_column, edge_type_column)
 
     elif args.command == "list_tag":
-        from vector_search_util.util import tag_loader
-        tags = await tag_loader.list_tags()
+        tags = await loader.list_tags()
         print("\n=== Tags in Vector DB ===")
         for i, tag in enumerate(tags, start=1):
             print(f"[{i}] Name: {tag.name}, Description: {tag.description}")
     elif args.command == "load_tag":
-        from vector_search_util.util import tag_loader
         input_file_path = args.input_file_path
         if not input_file_path:
             tag_load_parser.print_help()
             sys.exit(1)
         name_column = args.name_column
         description_column = args.description_column
-        await tag_loader.load_tags(input_file_path, name_column, description_column)
+        await loader.load_tags(input_file_path, name_column, description_column)
     elif args.command == "unload_tag":
-        from vector_search_util.util import tag_loader
         output_file = args.output_file
         if not output_file:
             tag_unload_parser.print_help()
             sys.exit(1)
-        await tag_loader.unload_tags(output_file)
+        await loader.unload_tags(output_file)
     elif args.command == "delete_tag":
-        from vector_search_util.util import tag_loader
         input_file_path = args.input_file_path
         if not input_file_path:
             tag_delete_parser.print_help()
             sys.exit(1)
         name_column = args.name_column
-        await tag_loader.delete_tags(input_file_path, name_column)
+        await loader.delete_tags(input_file_path, name_column)
     else:
         parser.print_help()
 

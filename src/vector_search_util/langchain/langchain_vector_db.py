@@ -109,7 +109,7 @@ class LangChainVectorDB(ABC):
             return
         await self.delete_documents_by_ids(vector_ids)
 
-    async def update_documents(self, data_list: list[EmbeddingData]):
+    async def upsert_documents(self, data_list: list[EmbeddingData]):
         
         # 既に存在するドキュメントを削除
         for data in data_list:

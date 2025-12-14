@@ -44,6 +44,9 @@
 - `load_category`: カテゴリ情報をExcelからDBに登録
 - `unload_category`: カテゴリ情報をDBからExcelに出力
 - `delete_category`: カテゴリ情報を削除
+- `load_relation`: 関連情報をExcelからDBに登録
+- `unload_relation`: 関連情報をDBからExcelに出力
+- `delete_relation`: 関連情報を削除
 
 ### 各コマンドのオプション
 
@@ -104,6 +107,77 @@ uv run -m vector_search_util delete_data -i delete_list.xlsx
 uv run -m vector_search_util load_category -i category.xlsx
 uv run -m vector_search_util unload_category -o category_out.xlsx
 uv run -m vector_search_util delete_category -i category_delete.xlsx
+uv run -m vector_search_util load_relation -i relation.xlsx
+uv run -m vector_search_util unload_relation -o relation_out.xlsx
+uv run -m vector_search_util delete_relation -i relation_delete.xlsx
+```
+
+### 🔗 relation関連コマンド
+
+`relation` は **カテゴリ間の関連性（関係性）を管理** するための機能です。  
+たとえば、「製品カテゴリ」と「技術カテゴリ」のように、異なるカテゴリ間の関係を定義・検索・削除できます。  
+これにより、知識グラフ的な構造をベクトルDB上で表現することが可能になります。
+
+#### 📥 load_relation
+| オプション | 説明 |
+|-------------|------|
+| `-i, --input_file_path` | Excelファイルのパス |
+| `--source_column` | 関連元カテゴリ列名（デフォルト: source） |
+| `--target_column` | 関連先カテゴリ列名（デフォルト: target） |
+| `--type_column` | 関連タイプ列名（デフォルト: type） |
+
+#### 📦 unload_relation
+| オプション | 説明 |
+|-------------|------|
+| `-o, --output_file` | 出力先Excelファイルのパス |
+| `-f, --filter_file` | フィルタ条件を含むJSONファイルのパス |
+
+#### ❌ delete_relation
+| オプション | 説明 |
+|-------------|------|
+| `-i, --input_file_path` | 削除対象のExcelファイルパス |
+| `--source_column` | 関連元カテゴリ列名（デフォルト: source） |
+| `--target_column` | 関連先カテゴリ列名（デフォルト: target） |
+| `--type_column` | 関連タイプ列名（デフォルト: type） |
+
+#### 💡 利用例
+
+カテゴリ間の関係をExcelで定義し、知識構造を管理できます。
+
+| source | target | type |
+|---------|---------|------|
+| AI | 機械学習 | includes |
+| 機械学習 | 深層学習 | includes |
+| AI | 自然言語処理 | related_to |
+
+このような関係を登録することで、検索時に関連カテゴリをたどる高度な検索が可能になります。
+
+---
+
+## APIサーバー
+
+`vector_search_util` は REST API サーバーとしても動作します。  
+外部アプリケーションやサービスから HTTP 経由でベクトル検索・データ登録を行うことができます。
+
+### 起動方法
+
+```bash
+uv run -m vector_search_util.api.api_server
+```
+
+### 主なエンドポイント
+
+| メソッド | エンドポイント | 説明 |
+|-----------|----------------|------|
+| `POST` | `/api/load_data` | データをベクトルDBに登録 |
+| `POST` | `/api/search` | クエリに基づくベクトル検索 |
+| `POST` | `/api/delete_data` | 指定データを削除 |
+| `GET` | `/api/health` | サーバーの稼働確認 |
+
+### 例
+
+```bash
+curl -X POST http://localhost:8000/api/search -H "Content-Type: application/json" -d '{"query": "AIとは何か？"}'
 ```
 
 ---
@@ -123,6 +197,7 @@ uv run -m vector_search_util.mcp.mcp_server
 - ベクトル検索APIの提供
 - LangChainベースの埋め込み生成
 - OpenAIまたはAzure OpenAIを利用したLLM連携
+- MCPツール経由での外部連携（例：AIChatUtil, WebSearchUtil など）
 
 ---
 
@@ -219,7 +294,7 @@ OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 ### Excelデータの登録
 
 ```bash
-uv run -m vector_search_util load -f data.xlsx -c content -i source_id -m category author
+uv run -m vector_search_util load_data -f data.xlsx -c content -i source_id -m category author
 ```
 
 ### ベクトル検索の実行
@@ -227,21 +302,3 @@ uv run -m vector_search_util load -f data.xlsx -c content -i source_id -m catego
 ```bash
 uv run -m vector_search_util search --query "AIとは何か？" -k 5 -f filter.json
 ```
-
-### MCPサーバーの起動
-
-```bash
-uv run -m vector_search_util mcp
-```
-
----
-
-## ライセンス
-
-このプロジェクトは [MIT License](LICENSE) のもとで公開されています。
-
----
-
-## リポジトリ
-
-GitHub: [https://github.com/knd3dayo/vector_search_util](https://github.com/knd3dayo/vector_search_util)
