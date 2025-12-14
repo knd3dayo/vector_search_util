@@ -6,18 +6,21 @@
             "command": "uv",
             "args": [
                 "--directory",
-                "<PATH_TO_ThIS_DIRECTORY>",
+                "<PATH_TO_PROJECT_ROOT>",
                 "run",
                 "-m",
-                "vector_search_uti.mcp.mcp_server"
+                "vector_search_util.mcp.mcp_server"
             ],
             "env": {
+                "APP_DATA_PATH": "work/app_data",
                 "VECTOR_DB_TYPE": "chroma",
                 "VECTOR_DB_URL": "work/chroma_db",
                 "VECTOR_DB_COLLECTION_NAME": "sample_collection",
+                "SOURCE_ID_KEY": "source_id",
+                "CATEGORY_KEY": "category",
                 "LLM_PROVIDER": "openai",
-                "OPENAI_API_KEY": "",
-                "OPENAI_COMPLETION_MODEL": "gpt-4o",
+                "OPENAI_API_KEY": "your_api_key_here",
+                "OPENAI_COMPLETION_MODEL": "gpt-5",
                 "OPENAI_EMBEDDING_MODEL": "text-embedding-3-small"
             }
         }
