@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Tuple, List, Any, Optional, Sequence
+from typing import Tuple, List, Any, Optional
 import asyncio, os, json
 
 from pydantic import Field
@@ -18,6 +18,7 @@ from sqlalchemy.sql import text
 
 from openai import RateLimitError
 from vector_search_util.langchain.models import EmbeddingData
+from vector_search_util.langchain.condition import Condition, EqCondition, InCondition, ContainsCondition, CompareCondition, AndCondition, OrCondition, NotCondition, ConditionContainer
 
 
 from vector_search_util.langchain.langchain_client import LangchainClient
@@ -36,13 +37,15 @@ class LangChainVectorDB(ABC):
 
     @abstractmethod
     # document_idのリストとmetadataのリストを返す
-    def _get_documents_(self, tags: dict[str, list[str]]) -> Tuple[List[str], List[EmbeddingData]]:
+    def _get_documents_(self, conditions: ConditionContainer = ConditionContainer()) -> Tuple[List[str], List[EmbeddingData]]:
         pass
 
-    @abstractmethod
-    def _create_search_kwargs_(self, k:int, tags: dict[str, list[str]]) -> dict[str, Any]:
-        pass
-    
+    def _create_search_kwargs_(self, k: int, conditions: ConditionContainer = ConditionContainer()) -> dict[str, Any]:
+        search_kwargs: dict[str, Any] = {"k": k}
+        filter = conditions.build()
+        search_kwargs["filter"] = filter
+        return search_kwargs
+
     @classmethod
     def create_vector_db(cls, client: LangchainClient) -> 'LangChainVectorDB':
         vector_db_type = client.llm_config.vector_db_type
@@ -60,9 +63,9 @@ class LangChainVectorDB(ABC):
     ########################################
     # パブリック
     ########################################
-    async def get_documents(self, tags: dict[str, list[str]] ={}) -> Tuple[List[str], List[EmbeddingData]]:
+    async def get_documents(self, conditions: ConditionContainer = ConditionContainer()) -> Tuple[List[str], List[EmbeddingData]]:
 
-        return self._get_documents_(tags)
+        return self._get_documents_(conditions)
     
 
     async def add_documents(self, data_list: list[EmbeddingData]):
@@ -100,9 +103,9 @@ class LangChainVectorDB(ABC):
 
         return len(doc_ids)    
 
-    async def delete_documents_by_tags(self, tags: dict[str, list[str]] ={}):
+    async def delete_documents_by_tags(self, conditions: ConditionContainer = ConditionContainer()):
         # ベクトルDB固有のvector id取得メソッドを呼び出し。
-        vector_ids, _ = self._get_documents_(tags)
+        vector_ids, _ = self._get_documents_(conditions)
 
         # vector_idsが空の場合は何もしない
         if len(vector_ids) == 0:
@@ -112,9 +115,10 @@ class LangChainVectorDB(ABC):
     async def upsert_documents(self, data_list: list[EmbeddingData]):
         
         # 既に存在するドキュメントを削除
-        for data in data_list:
-            tags = { self.client.llm_config.source_id_key: [data.source_id] }
-            await self.delete_documents_by_tags(tags)
+        conditions = ConditionContainer().add_in_condition(
+            self.client.llm_config.source_id_key, [ data.source_id for data in data_list ]
+            )
+        await self.delete_documents_by_tags(conditions)
 
         # ドキュメントを格納する。
         await self.add_documents(data_list)
@@ -137,7 +141,7 @@ class LangChainVectorDB(ABC):
                 logger.error(f"Error adding documents: {e}")
                 break
 
-    async def vector_search(self, query: str, category: str = "", filter: dict[str, list[str]] = {}, k: int = 5) -> List[EmbeddingData]:
+    async def vector_search(self, query: str, category: str = "", conditions: ConditionContainer = ConditionContainer(), k: int = 5) -> List[EmbeddingData]:
         """
         ベクトルDBからドキュメントを検索する。
         :param query: 検索クエリ
@@ -147,13 +151,12 @@ class LangChainVectorDB(ABC):
         if self.db is None:
             raise ValueError("db is None")
 
-        modified_filter = filter.copy()
-        # categoryが指定されている場合はfilterに追加
+        # categoryが指定されている場合はconditionsに追加
         if category:
             category_key = self.client.llm_config.category_key
-            modified_filter[category_key] = [category]
+            conditions.add_in_condition(category_key, [category])
 
-        search_kwargs: dict[str, Any] = self._create_search_kwargs_(k, modified_filter)
+        search_kwargs: dict[str, Any] = self._create_search_kwargs_(k, conditions)
 
         docs_and_scores = self.db.similarity_search_with_relevance_scores(query, **search_kwargs)
         # documentのmetadataにscoreを追加
@@ -209,32 +212,14 @@ class LangChainVectorDBChroma(LangChainVectorDB):
             )
         self.db = db
 
-    def __create_filter_condition__(self, tags: dict[str, list[str]]) -> dict[str, Any]:
-        conditions = []
-        for name, value_list in tags.items():
-            conditions.append({name: {"$in": value_list}})
-        if len(conditions) > 1:
-            filter = {"$and": conditions}
-        elif len(conditions) == 1:
-            filter = conditions[0]
-        else:
-            filter = {}
-        return filter
 
-    def _create_search_kwargs_(self, k: int, tags: dict[str, list[str]]) -> dict[str, Any]:
-        search_kwargs: dict[str, Any] = {"k": k}
-        filter = self.__create_filter_condition__(tags)
-        search_kwargs["filter"] = filter
-        return search_kwargs
-
-    def _get_documents_(self, tags: dict[str, list[str]]) -> Tuple[List[str], List[EmbeddingData]]:
+    def _get_documents_(self, conditions: ConditionContainer = ConditionContainer()) -> Tuple[List[str], List[EmbeddingData]]:
         ids=[]
-        logger.debug(f"tags:{tags}")
-        # K(key).is_in(value) & 条件 & ...の形の文を作成
-        conditions = self.__create_filter_condition__(tags)
-
-        if len(conditions) > 0:
-            doc_dict = self.db.get(where=conditions) # type: ignore
+        logger.debug(f"conditions:{conditions}")
+        
+        condition_dict = conditions.build()
+        if condition_dict:
+            doc_dict = self.db.get(where=condition_dict) # type: ignore
         else:
             doc_dict = self.db.get() # type: ignore
 
@@ -281,22 +266,7 @@ class LangChainVectorDBPGVector(LangChainVectorDB):
             )
         self.db = db
 
-    def _create_search_kwargs_(self, k:int, tags: dict[str, list[str]]) -> dict[str, Any]:
-        search_kwargs: dict[str, Any] = {"k": k}
-        if tags:
-            sql_where_clauses = ""
-            for name, value_list in tags.items():
-                # PGVectorのfilterはSQL文にする。
-                if not sql_where_clauses:
-                    sql_where_clauses += f"cmetadata->>'{name}' = ANY(ARRAY{value_list}::text[])"
-                else:
-                    sql_where_clauses += f" AND cmetadata->>'{name}' = ANY(ARRAY{value_list}::text[])"
-            search_kwargs["filter"] = sql_where_clauses
-
-        return search_kwargs
-    
-
-    def _get_documents_(self, tags: dict[str, list[str]] = {}) -> Tuple[List[str], List[EmbeddingData]]:
+    def _get_documents_(self, conditions: Optional[ConditionContainer] = None) -> Tuple[List[str], List[EmbeddingData]]:
         engine = sqlalchemy.create_engine(self.vector_db_url)
         with Session(engine) as session:
             stmt = text("SELECT uuid FROM langchain_pg_collection WHERE name=:name").bindparams(name=self.collection_name)
@@ -307,15 +277,8 @@ class LangChainVectorDBPGVector(LangChainVectorDB):
             logger.debug(f"collection_id: {collection_id}")
 
             params = {"collection_id": collection_id}
-            if tags:
-                where_clauses = []
-                for i, (name, value_list) in enumerate(tags.items()):
-                    key_name = f"name_{i}"
-                    val_name = f"value_{i}"
-                    where_clauses.append(f"cmetadata->>:{key_name} = ANY(:{val_name})")
-                    params[key_name] = name
-                    params[val_name] = value_list
-                where_sql = " AND ".join(where_clauses)
+            if conditions:
+                where_sql = conditions.to_postgres_sql()
                 query = f"""
                     SELECT id, document, cmetadata
                     FROM langchain_pg_embedding

@@ -2,7 +2,7 @@ import asyncio
 import aiosqlite
 import sqlite3
 import os
-from typing import Any
+from typing import Any, Optional
 from pydantic import BaseModel
 from tqdm.asyncio import tqdm_asyncio
 import pandas as pd
@@ -12,7 +12,7 @@ from vector_search_util.langchain.langchain_vector_db import LangChainVectorDB
 from vector_search_util.langchain.models import EmbeddingData
 from vector_search_util.llm.embedding_config import EmbeddingConfig
 from vector_search_util.langchain.langchain_client import LangchainClient
-
+from vector_search_util.langchain.condition import ConditionContainer
 # category_data
 class CategoryData(BaseModel):
     name: str
@@ -247,22 +247,23 @@ class EmbeddingClient:
         self.category_db_path: str = os.path.join(self.config.app_data_path, "vector_db_search_app.db")
         self.sqlite_client = SQLiteClient(self.category_db_path)
 
-    async def vector_search(self, query: str, category: str = "", filter: dict[str, list[str]] ={}, top_k: int = 5) -> list[EmbeddingData]:
-        results = await self.vector_db.vector_search(query, category, filter, top_k)
+    async def vector_search(self, query: str, category: str = "", condition: ConditionContainer = ConditionContainer(), top_k: int = 5) -> list[EmbeddingData]:
+        results = await self.vector_db.vector_search(query, category, condition, top_k)
         return results
 
     async def get_documents(
             self, 
-            source_ids: list[str] = [], 
-            category_ids: list[str] = [], 
-            tags: dict[str, list[str]] ={}
+            source_ids: list[str] = [],
+            category_ids: list[str] = [],
+            condition: ConditionContainer = ConditionContainer()
             ) -> tuple[list[str], list[EmbeddingData]]:
-        if source_ids:
-            tags[self.config.source_id_key] = source_ids
-        if category_ids:
-            tags[self.config.category_key] = category_ids
 
-        return await self.vector_db.get_documents(tags)
+        if source_ids:
+            condition.add_in_condition(self.config.source_id_key, source_ids)
+        if category_ids:
+            condition.add_in_condition(self.config.category_key, category_ids)
+
+        return await self.vector_db.get_documents(condition)
     
     async def upsert_documents(self, data_list: list[EmbeddingData]):
         await self.vector_db.upsert_documents(data_list)
@@ -277,9 +278,9 @@ class EmbeddingClient:
         # metadataに新規タグがあれば追加
         await self.sqlite_client.upsert_new_tags(data_list_metadata_keys_set)
 
-    async def delete_documents_by_source_ids(self, source_id_list: list[str], tags: dict[str, list[str]] ={}):
-        tags[self.config.source_id_key] = source_id_list
-        await self.vector_db.delete_documents_by_tags(tags)
+    async def delete_documents_by_source_ids(self, source_id_list: list[str], condition: ConditionContainer = ConditionContainer()):
+        condition.add_in_condition(self.config.source_id_key, source_id_list)
+        await self.vector_db.delete_documents_by_tags(condition)
 
     async def delete_all_documents(self):
         ids, _ = await self.vector_db.get_documents()
@@ -313,9 +314,10 @@ class EmbeddingClient:
     async def cleanup_categories(self):
         # Sqliteに登録されたカテゴリごとにタグ検索して、データが存在しない場合はそのタグを削除する。
         categories = await self.sqlite_client.get_categories()
+    
         for category in categories:
-            filter = {self.config.category_key: [category.name]}
-            vector_ids, _ = await self.vector_db.get_documents(filter)
+            condition = ConditionContainer().add_in_condition(self.config.category_key, [category.name])
+            vector_ids, _ = await self.vector_db.get_documents(condition)
             if len(vector_ids) == 0:
                 await self.sqlite_client.delete_categories([category.name])
     
@@ -375,8 +377,11 @@ class EmbeddingBatchClient:
         source_id_list: list[str] = []
         if source_id_column in df.columns:
             source_id_list = df[source_id_column].astype(str).tolist()
-
-        await self.embedding_client.delete_documents_by_source_ids(source_id_list, tags)
+        # tagからConditionContainerを作成
+        condition = ConditionContainer()
+        for key, values in tags.items():
+            condition.add_in_condition(key, values)
+        await self.embedding_client.delete_documents_by_source_ids(source_id_list, condition)
     
     def load_documents_from_excel(
         self, file_path: str, content_column: str, source_id_column: str, category_column: str, metadata_columns: list[str]
@@ -390,7 +395,11 @@ class EmbeddingBatchClient:
         self, file_path: str,
         tags: dict[str, Any] ={}
     ):
-        _, documents = await self.embedding_client.vector_db.get_documents(tags)
+        # tagからConditionContainerを作成
+        condition = ConditionContainer()
+        for key, values in tags.items():
+            condition.add_in_condition(key, values)
+        _, documents = await self.embedding_client.vector_db.get_documents(condition)
         keys = set()
         keys.add("page_content")
         data_list = []

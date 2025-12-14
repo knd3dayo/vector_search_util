@@ -2,14 +2,14 @@ from typing import Annotated
 from fastapi import FastAPI
 from vector_search_util.util.client import EmbeddingClient, EmbeddingData, CategoryData, RelationData, TagData
 from vector_search_util.llm.embedding_config import EmbeddingConfig
-
+from vector_search_util.langchain.condition import ConditionContainer
 app = FastAPI()
 
 @app.get("/vector_search", response_model=list)
 async def vector_search(
     query: Annotated[str, "The search query string."],
     category: Annotated[str, "The category to filter the search by."] = "",
-    filter: Annotated[dict[str, list[str]], "A dictionary of tags to filter the search by. eg { \"key\": [\"value1\", \"value2\"] }"] = {},
+    filter: Annotated[ConditionContainer, "A dictionary of tags to filter the search by. "] = ConditionContainer(),
     num_results: Annotated[int, "The number of results to return."] = 5,
 ) -> list[EmbeddingData]:
     
@@ -18,7 +18,7 @@ async def vector_search(
     Args:
         query (str): The search query string.
         category (str | None): The category to filter the search by.
-        filter (dict[str, list[str]] | None): A dictionary of tags to filter the search by. eg { "key": ["value1", "value2"] }
+        filter (ConditionContainer): A dictionary of tags to filter the search by.
         num_results (int): The number of results to return.
 
     Returns:
@@ -34,20 +34,20 @@ async def vector_search(
 async def get_documents(
     source_ids: Annotated[list[str], "A list of source IDs of documents to retrieve."] = [],
     category_ids: Annotated[list[str], "A list of category IDs to filter documents by."] = [],
-    tags: Annotated[dict[str, list[str]], "A dictionary of tags to filter documents by. eg { \"key\": [\"value1\", \"value2\"] }"] = {},
+    filter: Annotated[ConditionContainer, "A dictionary of tags to filter documents by. "] = ConditionContainer(),
 ) -> list[EmbeddingData]:
     """Retrieve documents from the vector database based on a list of source IDs.
 
     Args:
         source_ids (list[str]): A list of source IDs of documents to retrieve.
         category_ids (list[str]): A list of category IDs to filter documents by.
-        tags (dict[str, list[str]]): A dictionary of tags to filter documents by. eg { "key": ["value1", "value2"] }
+        filter (ConditionContainer): A dictionary of tags to filter documents by.
     Returns:
         list[EmbeddingData]: A list of documents retrieved from the vector database.
     """
     config = EmbeddingConfig()
     embedding_client = EmbeddingClient(config)
-    _, documents = await embedding_client.get_documents(source_ids, category_ids, tags)
+    _, documents = await embedding_client.get_documents(source_ids, category_ids, filter)
     return documents
 
 # upsert documents
@@ -69,18 +69,18 @@ async def upsert_documents(
 @app.delete("/delete_documents")
 async def delete_documents(
     source_id_list: Annotated[list[str], "A list of source IDs of documents to delete."],
-    tags: Annotated[dict[str, list[str]], "A dictionary of tags to filter documents by. eg { \"key\": [\"value1\", \"value2\"] }"] = {},
+    filter: Annotated[ConditionContainer, "A dictionary of tags to filter documents by. "] = ConditionContainer(),
 ):
     """Delete documents from the vector database based on a list of source IDs.
 
     Args:
         source_id_list (list[str]): A list of source IDs of documents to delete.
-        tags (dict[str, list[str]]): A dictionary of tags to filter documents by. eg { "key": ["value1", "value2"] }
+        filter (ConditionContainer): A dictionary of tags to filter documents by.
     """
 
     config = EmbeddingConfig()
     embedding_client = EmbeddingClient(config)
-    await embedding_client.delete_documents_by_source_ids(source_id_list, tags)
+    await embedding_client.delete_documents_by_source_ids(source_id_list, filter)
 
 # get categories
 @app.get("/get_categories", response_model=list)
