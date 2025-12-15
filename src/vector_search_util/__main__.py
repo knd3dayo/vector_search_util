@@ -25,6 +25,8 @@ async def main():
     load_parser.add_argument("--content_column", type=str, default="content", help="Name of the content column.")
     load_parser.add_argument("--source_id_column", type=str, default="source_id", help="Name of the source_id column.")
     load_parser.add_argument("--category_column", type=str, default="category", help="Category tag to filter documents.")
+    # append_vectors オプションを追加
+    load_parser.add_argument("--append_vectors", action="store_true", help="Append mode if set; otherwise, overwrite existing data.")
 
     # unload_data サブコマンド
     unload_parser = subparsers.add_parser("unload_data", help="Execute data unloading process")
@@ -125,7 +127,8 @@ async def main():
         source_id_column = args.source_id_column
         category_column = args.category_column
         metadata_columns = args.metadata_columns
-        await api_server.load_documents_from_excel(file_path, content_column, source_id_column, category_column, metadata_columns)
+        append_vectors = args.append_vectors
+        await api_server.load_documents_from_excel(file_path, content_column, source_id_column, category_column, metadata_columns, append_vectors)
 
     elif args.command == "unload_data":
         output_file = args.output_file

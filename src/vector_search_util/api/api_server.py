@@ -258,7 +258,11 @@ async def load_documents_from_excel(
         content_column: Annotated[str, "The name of the column containing document content."] = "content",
         source_id_column: Annotated[str, "The name of the column containing source IDs."] = "source_id",
         category_column: Annotated[str, "The name of the column containing categories."] = "category",
-        metadata_columns: Annotated[list[str], "A list of column names to include as metadata."] = []
+        metadata_columns: Annotated[list[str], "A list of column names to include as metadata."] = [],
+        append_vectors: Annotated[bool, """
+                                  If True, add vectors for existing source document search. 
+                                  If the vector DB has existing documents, vectors for existing document search are added. 
+                                  If the vector DB has no existing documents, new ones are created."""] = False
     ):
     """Load documents from an Excel file into the vector database.
 
@@ -268,12 +272,13 @@ async def load_documents_from_excel(
         source_id_column (str): The name of the column containing source IDs.
         category_column (str): The name of the column containing categories.
         metadata_columns (list[str]): A list of column names to include as metadata.
+        append_vectors (bool): If true, add vectors for existing source document search.
     """
 
     embedding_client = EmbeddingClient()
     batch_client = EmbeddingBatchClient(embedding_client)
     await batch_client.load_documents_from_excel(
-        file_path, content_column, source_id_column, category_column, metadata_columns
+        file_path, content_column, source_id_column, category_column, metadata_columns, append_vectors
     )
 
 @app.get("/unload_documents_to_excel")
@@ -395,4 +400,3 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     uvicorn.run(app, host="0.0.0.0", port=8000)
-    

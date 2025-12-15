@@ -20,7 +20,7 @@ class EmbeddingConfig:
         self.source_content_key: str = os.getenv("SOURCE_CONTENT_KEY","source_content")
         self.category_key: str = os.getenv("CATEGORY_KEY","category")
         self.updated_at_key: str = os.getenv("UPDATED_AT_KEY","updated_at")
-        self.sequence_id_key: str = os.getenv("SEQUENCE_ID_KEY","sequence_id")
+        self.first_document_key: str = os.getenv("FIRST_DOCUMENT_KEY","first_document")
 
         # ベクトル化する際にSOURCE_CONTENTを分割する。その際のチャンクサイズ
         self.chunk_size: int = int(os.getenv("CHUNK_SIZE","4000"))
@@ -92,16 +92,16 @@ class SourceDocumentData(BaseModel):
         return cls.embedding_config
 
     @classmethod
-    def to_langchain_documents(cls, data_list: list["SourceDocumentData"]) -> list[Document]:
+    def to_langchain_documents(cls, data_list: list["SourceDocumentData"], append_vectors: bool = False) -> list[Document]:
         """Convert to Langchain Document."""
         documents: list[Document] = []
         for data in data_list:
-            docs = cls.__to_langchain_documents_from_single__(data)
+            docs = cls.__to_langchain_documents_from_single__(data, append_vectors)
             documents.extend(docs)
         return documents
 
     @classmethod
-    def __to_langchain_documents_from_single__(cls, data: "SourceDocumentData") -> list[Document]:
+    def __to_langchain_documents_from_single__(cls, data: "SourceDocumentData", append_vectors: bool = False) -> list[Document]:
         """Convert to Langchain Document."""
         embedding_config = cls._get_embedding_config_()
         documents: list[Document] = []
@@ -114,16 +114,18 @@ class SourceDocumentData(BaseModel):
 
         for i in range(len(page_countents)):
             page_content = page_countents[i]
-            # metadataにsequence_idを追加
-            doc = Document(
-                page_content=page_content,
-                metadata={
+            metadata={
                     embedding_config.source_id_key: data.source_id,
                     embedding_config.category_key: data.category,
                     embedding_config.updated_at_key: updated_at_str,
-                    embedding_config.sequence_id_key: i,
                     **data.metadata
                 }
+            # metadataにfirst_document_flagを追加
+            if i == 0 and not append_vectors:
+                metadata[embedding_config.first_document_key] = True
+            doc = Document(
+                page_content=page_content,
+                metadata=metadata
             )
             documents.append(doc)
         return documents
@@ -132,12 +134,14 @@ class SourceDocumentData(BaseModel):
     def from_langchain_documents(cls, documents: list[Document], get_source_content_function: Callable) -> list["SourceDocumentData"]:
         embedding_config = cls._get_embedding_config_()
 
-        first_sequence_docs = [doc for doc in documents if doc.metadata.get(embedding_config.sequence_id_key, 0) == 0]
-        data_list: list[SourceDocumentData] = []
-        for doc in first_sequence_docs:
-            data = SourceDocumentData.__from_langchain_document__(doc, get_source_content_function)
-            data_list.append(data)
-        return data_list
+        first_documents = [doc for doc in documents if doc.metadata.get(embedding_config.first_document_key, False) == True]
+        data_dict: dict[str, SourceDocumentData] = {}
+        for doc in first_documents:
+            source_id = doc.metadata.get(embedding_config.source_id_key, "")
+            if source_id not in data_dict:
+                data = SourceDocumentData.__from_langchain_document__(doc, get_source_content_function)
+                data_dict[source_id] = data
+        return list(data_dict.values())
     
     @classmethod
     def __from_langchain_document__(cls, document: Document, get_source_content_function: Callable[[str], str]) -> "SourceDocumentData":
@@ -153,13 +157,13 @@ class SourceDocumentData(BaseModel):
             updated_at = datetime.now(timezone.utc)
 
 
-        # documentのmetadataをコピーして、source_id, category, updated_at, sequence_idを削除する
+        # documentのmetadataをコピーして、source_id, category, updated_at, first_document_keyを削除する
         metadata_copy = {
             k: v for k, v in document.metadata.copy().items() if k not in [
                 embedding_config.source_id_key, 
                 embedding_config.category_key, 
                 embedding_config.updated_at_key, 
-                embedding_config.sequence_id_key
+                embedding_config.first_document_key
                 ]
             }
 

@@ -61,21 +61,35 @@ class EmbeddingClient:
         ids, results = await self.get_langchain_documents(source_ids, category_ids, condition)
         return ids, SourceDocumentData.from_langchain_documents(results, self.sqlite_client.get_content_by_source_id)
     
-    async def upsert_documents(self, data_list: list[SourceDocumentData]):
-        # source_documentsに新規ドキュメントがあれば追加
-        await self.sqlite_client.upsert_source_documents(data_list)
-        # data_listのcategoryのsetを取得して、カテゴリDBに存在しない場合は追加する
-        data_list_category_names_set = set([data.category for data in data_list if data.category is not None])
-        # data_listのmetadataのkeyのsetを取得して、タグDBに存在しない場合は追加する
-        data_list_metadata_keys_set = set([key for data in data_list for key in data.metadata.keys() if key is not None])
+    async def add_documents(self, data_list: list[SourceDocumentData]):
+        result = await self.vector_db.add_documents(SourceDocumentData.to_langchain_documents(data_list))
+        if result:
+            # source_documentsに新規ドキュメントがあれば追加
+            await self.sqlite_client.upsert_source_documents(data_list)
+            # data_listのcategoryのsetを取得して、カテゴリDBに存在しない場合は追加する
+            data_list_category_names_set = set([data.category for data in data_list if data.category is not None])
+            # data_listのmetadataのkeyのsetを取得して、タグDBに存在しない場合は追加する
+            data_list_metadata_keys_set = set([key for data in data_list for key in data.metadata.keys() if key is not None])
+            # metadataに新規カテゴリがあれば追加
+            await self.sqlite_client.upsert_new_categories(data_list_category_names_set)
+            # metadataに新規タグがあれば追加
+            await self.sqlite_client.upsert_new_tags(data_list_metadata_keys_set)
 
-        await self.vector_db.upsert_documents(SourceDocumentData.to_langchain_documents(data_list))
+    async def upsert_documents(self, data_list: list[SourceDocumentData], append_vectors: bool = False):
+        result = await self.vector_db.upsert_documents(SourceDocumentData.to_langchain_documents(data_list), append_vectors)
 
-        # metadataに新規カテゴリがあれば追加
-        await self.sqlite_client.upsert_new_categories(data_list_category_names_set)
+        if result:
+            # source_documentsに新規ドキュメントがあれば追加
+            await self.sqlite_client.upsert_source_documents(data_list)
+            # data_listのcategoryのsetを取得して、カテゴリDBに存在しない場合は追加する
+            data_list_category_names_set = set([data.category for data in data_list if data.category is not None])
+            # data_listのmetadataのkeyのsetを取得して、タグDBに存在しない場合は追加する
+            data_list_metadata_keys_set = set([key for data in data_list for key in data.metadata.keys() if key is not None])
+            # metadataに新規カテゴリがあれば追加
+            await self.sqlite_client.upsert_new_categories(data_list_category_names_set)
+            # metadataに新規タグがあれば追加
+            await self.sqlite_client.upsert_new_tags(data_list_metadata_keys_set)
 
-        # metadataに新規タグがあれば追加
-        await self.sqlite_client.upsert_new_tags(data_list_metadata_keys_set)
 
     async def delete_documents_by_source_ids(self, source_id_list: list[str], condition: ConditionContainer = ConditionContainer()):
         condition.add_in_condition(self.config.source_id_key, source_id_list)
@@ -138,18 +152,18 @@ class EmbeddingBatchClient:
     def __init__(self, embedding_client: EmbeddingClient):
         self.embedding_client = embedding_client
 
-    async def _process_row_(self, row_num: int, data: SourceDocumentData, progress: tqdm_asyncio) -> int:
-        await self.embedding_client.upsert_documents([data])
+    async def _process_row_(self, row_num: int, data: SourceDocumentData, progress: tqdm_asyncio, append_vectors: bool) -> int:
+        await self.embedding_client.upsert_documents([data], append_vectors)
         progress.update(1)
         return row_num
 
-    async def update(self, data_list: list[SourceDocumentData]):
+    async def update(self, data_list: list[SourceDocumentData], append_vectors: bool = False):
         progress = tqdm_asyncio(total=len(data_list), desc="progress")
         progress.bar_format = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]"
 
         concurrency  = int(self.embedding_client.config.concurrency)
         async with asyncio.Semaphore(concurrency):
-            tasks = [self._process_row_(i, data, progress) for i, data in enumerate(data_list)]
+            tasks = [self._process_row_(i, data, progress, append_vectors) for i, data in enumerate(data_list)]
             await asyncio.gather(*tasks)
             progress.close()
 
@@ -189,13 +203,13 @@ class EmbeddingBatchClient:
         await self.embedding_client.delete_documents_by_source_ids(source_id_list, condition)
     
     async def load_documents_from_excel(
-        self, file_path: str, content_column: str, source_id_column: str, category_column: str, metadata_columns: list[str]
+        self, file_path: str, content_column: str, source_id_column: str, category_column: str, metadata_columns: list[str], append_vectors: bool = False
     ):
         df = pd.read_excel(file_path)
         df.replace(to_replace=r"_x000D_", value="", regex=True, inplace=True)
         df.fillna("", inplace=True)
         data_list = self.__create_documents_from_dataframe__(df, content_column, source_id_column, category_column, metadata_columns)
-        await self.update(data_list)
+        await self.update(data_list, append_vectors)
     
     async def unload_documents_to_excel(
         self, file_path: str,
@@ -205,13 +219,21 @@ class EmbeddingBatchClient:
         condition = ConditionContainer()
         for key, values in tags.items():
             condition.add_in_condition(key, values)
-        _, documents = await self.embedding_client.vector_db.get_documents(condition)
+        _, documents = await self.embedding_client.get_documents(condition=condition)
         keys = set()
-        keys.add("page_content")
+        source_id_key = self.embedding_client.config.source_id_key
+        source_content_key = self.embedding_client.config.source_content_key
+        category_key = self.embedding_client.config.category_key
+        keys.add(source_id_key)
+        keys.add(source_content_key)
+        keys.add(category_key)
+
         data_list = []
         for document in documents:
             data = {
-                "page_content": document.page_content,
+                "source_content": document.source_content,
+                "source_id": document.source_id,
+                "category": document.category
             }
             keys.update(document.metadata.keys())
             data.update(document.metadata)

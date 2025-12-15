@@ -68,12 +68,13 @@ class LangChainVectorDB(ABC):
         return self._get_documents_(conditions)
     
 
-    async def add_documents(self, documents: list[Document]):
+    async def add_documents(self, documents: list[Document]) -> bool:
 
         if self.db is None:
             raise ValueError("db is None")
  
         await self.add_doucment_with_retry(self.db, documents)
+        return True
 
     async def delete_documents_by_ids(self, doc_ids:list=[]):
         if len(doc_ids) == 0:
@@ -94,16 +95,22 @@ class LangChainVectorDB(ABC):
             return
         await self.delete_documents_by_ids(vector_ids)
 
-    async def upsert_documents(self, data_list: list[Document]):
+    async def upsert_documents(self, data_list: list[Document], append_vectors: bool = False) -> bool:
         
         # 既に存在するドキュメントを削除
         conditions = ConditionContainer().add_in_condition(
             self.client.llm_config.source_id_key, [ data.metadata.get(self.client.llm_config.source_id_key, "") for data in data_list ]
             )
-        await self.delete_documents_by_tags(conditions)
-
+        if not append_vectors:
+            await self.delete_documents_by_tags(conditions)
+        else:
+            logger.info("append_vectors is True. skip delete existing documents.")
+            existing_ids, exsisting_docs = await self.get_documents(conditions)
+            
         # ドキュメントを格納する。
         await self.add_documents(data_list)
+
+        return True
 
     # RateLimitErrorが発生した場合は、指数バックオフを行う
     async def add_doucment_with_retry(self, vector_db: VectorStore, documents: list[Document], max_retries: int = 5, delay: float = 1.0):
