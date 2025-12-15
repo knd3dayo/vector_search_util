@@ -12,11 +12,11 @@ class SQLiteClient:
             dirname = os.path.dirname(self.db_path)
             if not os.path.exists(dirname):
                 os.makedirs(dirname)
-            SQLiteClient.initialized = True
             self.__create_categories_table__()
             self.__create_tags_table__()
             self.__create_relations_table__()
             self.__create_source_documents_table__()
+            SQLiteClient.initialized = True
     
     def __create_source_documents_table__(self):
         # DBPropertiesテーブルが存在しない場合は作成する
@@ -26,7 +26,7 @@ class SQLiteClient:
                 CREATE TABLE IF NOT EXISTS documents (
                     source_id TEXT NOT NULL PRIMARY KEY,
                     source_content TEXT NOT NULL,
-                    extended_properties TEXT
+                    metadata TEXT
                 )
             ''')
             conn.commit()
@@ -87,7 +87,7 @@ class SQLiteClient:
         conditions = []
         if source_ids:
             conditions.append("source_id IN ({})".format(",".join("?" * len(source_ids))))
-        query = "SELECT source_id, source_content, extended_properties FROM documents"
+        query = "SELECT source_id, source_content, metadata FROM documents"
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
 
@@ -97,11 +97,11 @@ class SQLiteClient:
                 rows = await cur.fetchall()
                 documents = []
                 for row in rows:
-                    extended_properties_dict = json.loads(row[2]) if row[2] else {}
+                    metadata_dict = json.loads(row[2]) if row[2] else {}
                     doc = SourceDocumentData(
                         source_id=row[0],
                         source_content=row[1],
-                        extended_properties=extended_properties_dict
+                        metadata=metadata_dict
                     )
                     documents.append(doc)
                 return documents
@@ -110,16 +110,16 @@ class SQLiteClient:
         async with aiosqlite.connect(self.db_path) as conn:
             async with conn.cursor() as cur:
                 await cur.executemany('''
-                    INSERT INTO documents (source_id, source_content, extended_properties)
+                    INSERT INTO documents (source_id, source_content, metadata)
                     VALUES (?, ?, ?)
                     ON CONFLICT(source_id) DO UPDATE SET 
                         source_content=excluded.source_content,
-                        extended_properties=excluded.extended_properties
+                        metadata=excluded.metadata
                 ''', [
                     (
                         doc.source_id, 
                         doc.source_content, 
-                        json.dumps(doc.extended_properties, ensure_ascii=False) if doc.extended_properties else None
+                        json.dumps(doc.metadata, ensure_ascii=False) if doc.metadata else None
                     ) 
                     for doc in documents
                 ])

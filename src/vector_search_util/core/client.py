@@ -67,7 +67,7 @@ class EmbeddingClient:
         # data_listのcategoryのsetを取得して、カテゴリDBに存在しない場合は追加する
         data_list_category_names_set = set([data.category for data in data_list if data.category is not None])
         # data_listのmetadataのkeyのsetを取得して、タグDBに存在しない場合は追加する
-        data_list_metadata_keys_set = set([key for data in data_list for key in data.tags.keys() if key is not None])
+        data_list_metadata_keys_set = set([key for data in data_list for key in data.metadata.keys() if key is not None])
 
         await self.vector_db.upsert_documents(SourceDocumentData.to_langchain_documents(data_list))
 
@@ -164,7 +164,7 @@ class EmbeddingBatchClient:
             if not content or not source_id:
                 continue
             metadata = {key: row.get(key, "") for key in metadata_columns}
-            data = SourceDocumentData(source_content=str(content), source_id=str(source_id), category=str(category), tags=metadata)
+            data = SourceDocumentData(source_content=str(content), source_id=str(source_id), category=str(category), metadata=metadata)
             data_list.append(data)
         return data_list
 

@@ -20,9 +20,7 @@ class EmbeddingConfig:
         self.source_content_key: str = os.getenv("SOURCE_CONTENT_KEY","source_content")
         self.category_key: str = os.getenv("CATEGORY_KEY","category")
         self.updated_at_key: str = os.getenv("UPDATED_AT_KEY","updated_at")
-        self.extended_properties_key: str = os.getenv("EXTENDED_PROPERTIES_KEY","extended_properties")
         self.sequence_id_key: str = os.getenv("SEQUENCE_ID_KEY","sequence_id")
-        self.tags_key: str = os.getenv("TAGS_KEY","tags")
 
         # ベクトル化する際にSOURCE_CONTENTを分割する。その際のチャンクサイズ
         self.chunk_size: int = int(os.getenv("CHUNK_SIZE","4000"))
@@ -85,8 +83,7 @@ class SourceDocumentData(BaseModel):
     source_content: str
     category: str = ""
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    extended_properties : dict[str, Any] = Field(default_factory=dict)
-    tags : dict[str, Any] = Field(default_factory=dict)
+    metadata : dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
     def _get_embedding_config_(cls) -> EmbeddingConfig:
@@ -125,8 +122,7 @@ class SourceDocumentData(BaseModel):
                     embedding_config.category_key: data.category,
                     embedding_config.updated_at_key: updated_at_str,
                     embedding_config.sequence_id_key: i,
-                    embedding_config.extended_properties_key: json.dumps(data.extended_properties, ensure_ascii=False),
-                    **data.tags
+                    **data.metadata
                 }
             )
             documents.append(doc)
@@ -156,17 +152,13 @@ class SourceDocumentData(BaseModel):
         else:
             updated_at = datetime.now(timezone.utc)
 
-        extended_properties_str = document.metadata.get(embedding_config.extended_properties_key, "{}")
-        extended_properties = json.loads(extended_properties_str)
 
-        # documentのmetadataをコピーして、source_id, category, updated_at, extended_propertiesを削除したものをtagsとする
-        metadata_copy = document.metadata.copy()
-        tags = {
-            k: v for k, v in metadata_copy.items() if k not in [
+        # documentのmetadataをコピーして、source_id, category, updated_at, sequence_idを削除する
+        metadata_copy = {
+            k: v for k, v in document.metadata.copy().items() if k not in [
                 embedding_config.source_id_key, 
                 embedding_config.category_key, 
                 embedding_config.updated_at_key, 
-                embedding_config.extended_properties_key, 
                 embedding_config.sequence_id_key
                 ]
             }
@@ -176,8 +168,7 @@ class SourceDocumentData(BaseModel):
             source_content=get_source_content_function(source_id),
             category=category,
             updated_at=updated_at,
-            extended_properties=extended_properties,
-            tags=tags
+            metadata=metadata_copy
         )
         return data
 
