@@ -323,8 +323,7 @@ class ConditionContainer(BaseModel):
         translator = PostgresJsonbTranslator()
         return translator.translate(self.build())
     
-
-class PostgresJsonbTranslator:
+class PstgresTranslator:
     def translate(self, condition_dict):
         return self._translate_dict(condition_dict)
 
@@ -345,26 +344,71 @@ class PostgresJsonbTranslator:
         if isinstance(expr, dict):
             if "$in" in expr:
                 vals = ",".join([f"'{v}'" for v in expr["$in"]])
-                return f"(cmetadata->>'{field}') IN ({vals})"
+                return f"'{field}' IN ({vals})"
 
             if "$regex" in expr:
-                return f"(cmetadata->>'{field}') LIKE '%{expr['$regex']}%'"
+                return f"'{field}' LIKE '%{expr['$regex']}%'"
 
             if "$gte" in expr:
-                return f"(cmetadata->>'{field}')::numeric >= {expr['$gte']}"
+                return f"'{field}' >= {expr['$gte']}"
 
             if "$lte" in expr:
-                return f"(cmetadata->>'{field}')::numeric <= {expr['$lte']}"
+                return f"'{field}' <= {expr['$lte']}"
 
             if "$gt" in expr:
-                return f"(cmetadata->>'{field}')::numeric > {expr['$gt']}"
+                return f"'{field}' > {expr['$gt']}"
 
             if "$lt" in expr:
-                return f"(cmetadata->>'{field}')::numeric < {expr['$lt']}"
+                return f"'{field}' < {expr['$lt']}"
 
             if "$not" in expr:
                 inner = self._translate_field(field, expr["$not"])
                 return f"NOT ({inner})"
 
         # eq
-        return f"(cmetadata->>'{field}') = '{expr}'"
+        return f"'{field}' = '{expr}'"    
+
+class PostgresJsonbTranslator:
+    def translate(self, condition_dict, json_field: str = "cmetadata"):
+        return self._translate_dict(condition_dict, json_field)
+
+    def _translate_dict(self, d, json_field):
+        clauses = []
+        for key, value in d.items():
+            if key == "$and":
+                sub = [self._translate_dict(v, json_field) for v in value]
+                clauses.append("(" + " AND ".join(sub) + ")")
+            elif key == "$or":
+                sub = [self._translate_dict(v, json_field) for v in value]
+                clauses.append("(" + " OR ".join(sub) + ")")
+            else:
+                clauses.append(self._translate_field(key, value, json_field))
+        return " AND ".join(clauses)
+
+    def _translate_field(self, field, expr, json_field):
+        if isinstance(expr, dict):
+            if "$in" in expr:
+                vals = ",".join([f"'{v}'" for v in expr["$in"]])
+                return f"({json_field}->>'{field}') IN ({vals})"
+
+            if "$regex" in expr:
+                return f"({json_field}->>'{field}') LIKE '%{expr['$regex']}%'"
+
+            if "$gte" in expr:
+                return f"({json_field}->>'{field}')::numeric >= {expr['$gte']}"
+
+            if "$lte" in expr:
+                return f"({json_field}->>'{field}')::numeric <= {expr['$lte']}"
+
+            if "$gt" in expr:
+                return f"({json_field}->>'{field}')::numeric > {expr['$gt']}"
+
+            if "$lt" in expr:
+                return f"({json_field}->>'{field}')::numeric < {expr['$lt']}"
+
+            if "$not" in expr:
+                inner = self._translate_field(field, expr["$not"], json_field)
+                return f"NOT ({inner})"
+
+        # eq
+        return f"({json_field}->>'{field}') = '{expr}'"
