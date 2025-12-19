@@ -24,7 +24,7 @@ mcp = FastMCP()
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run MCP server with specified mode and APP_DATA_PATH.")
     # -m オプションを追加
-    parser.add_argument("-m", "--mode", choices=["http", "stdio"], default="stdio", help="Mode to run the server in: 'http' for HTTP server, 'stdio' for standard input/output.")
+    parser.add_argument("-m", "--mode", choices=["sse", "http", "stdio"], default="stdio", help="Mode to run the server in: 'http' for HTTP server, 'stdio' for standard input/output.")
     # 引数を解析して返す
     # -t tools オプションを追加 toolsはカンマ区切りの文字列. search_wikipedia_ja_mcp, vector_search, etc. 指定されていない場合は空文字を設定
     parser.add_argument("-t", "--tools", type=str, default="", help="Comma-separated list of tools to use, e.g., 'search_wikipedia_ja_mcp,vector_search_mcp'. If not specified, no tools are loaded.")
@@ -71,10 +71,15 @@ async def main():
     if mode == "stdio":
         await mcp.run_async()
 
+    elif mode == "sse":
+        # port番号を取得
+        port = args.port
+        await mcp.run_async(transport="sse", host="0.0.0.0", port=port)
+
     elif mode == "http":
         # port番号を取得
         port = args.port
-        await mcp.run_async(transport="streamable-http", port=port)
+        await mcp.run_async(transport="streamable-http", host="0.0.0.0", port=port)
 
 
 if __name__ == "__main__":
