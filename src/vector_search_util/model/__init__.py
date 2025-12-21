@@ -264,6 +264,7 @@ class ConditionContainer(BaseModel):
             EqCondition, InCondition, ContainsCondition, CompareCondition, AndCondition, OrCondition, NotCondition
             ]
         ] = Field(default_factory=list, description="List of conditions")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional metadata for the condition container")
 
     # --- 基本条件 ---
     def add_eq_condition(self, field, value):

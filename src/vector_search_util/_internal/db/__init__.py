@@ -82,7 +82,8 @@ class SQLiteClient:
             cur.execute('''
                 CREATE TABLE IF NOT EXISTS conditions (
                     name TEXT NOT NULL PRIMARY KEY,
-                    condition_data TEXT NOT NULL
+                    condition_data TEXT NOT NULL,
+                    metadata TEXT
                 )
             ''')
             conn.commit()
@@ -307,31 +308,39 @@ class SQLiteClient:
         if new_tags:
             await self.upsert_tags(new_tags)
 
-
-    async def get_conditions(self, name: str | None = None) -> list[ConditionContainer]:
-        query = "SELECT name, condition_data FROM conditions"
-        if name:
-            query += " WHERE name = ?"
+    async def get_conditions(
+        self, name_list: list[str] = [], 
+        conditions: ConditionContainer = ConditionContainer()
+        ) -> list[ConditionContainer]:
         
-        conditions = []
+        query = "SELECT name, condition_data, metadata FROM conditions"
+        if name_list:
+            conditions.add_in_condition("name", name_list)
+        sql_conditions = conditions.to_sqlite_sql()
+        if sql_conditions:
+            query += " WHERE " + sql_conditions
+
+        results = []
         async with aiosqlite.connect(self.db_path) as conn:
             async with conn.cursor() as cur:
-                await cur.execute(query, (name,))
+                await cur.execute(query, tuple(name_list))
                 rows = await cur.fetchall()
                 for row in rows:
                     condition_data = json.loads(row[1])
-                    condition_container = ConditionContainer(name=row[0], **condition_data)
-                    conditions.append(condition_container)
-        return conditions
-    
+                    metadata = json.loads(row[2]) if row[2] else {}
+                    condition_container = ConditionContainer(name=row[0], **condition_data, metadata=metadata)
+                    results.append(condition_container)
+        return results
+
+
     async def upsert_conditions(self, conditions: list[ConditionContainer]):
         async with aiosqlite.connect(self.db_path) as conn:
             async with conn.cursor() as cur:
                 await cur.executemany('''
-                    INSERT INTO conditions (name, condition_data)
-                    VALUES (?, ?)
-                    ON CONFLICT(name) DO UPDATE SET condition_data=excluded.condition_data
-                ''', [(condition.name, json.dumps(condition.model_dump(exclude={"name"}), ensure_ascii=False)) for condition in conditions])
+                    INSERT INTO conditions (name, condition_data, metadata)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(name) DO UPDATE SET condition_data=excluded.condition_data, metadata=excluded.metadata
+                ''', [(condition.name, json.dumps(condition.model_dump(exclude={"name"}), ensure_ascii=False), json.dumps(condition.metadata, ensure_ascii=False) if condition.metadata else None) for condition in conditions])
             await conn.commit()
     
     async def delete_conditions(self, names: list[str]):
@@ -349,4 +358,3 @@ class SQLiteClient:
                     DELETE FROM conditions
                 ''')
             await conn.commit()
-            
