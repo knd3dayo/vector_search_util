@@ -256,8 +256,9 @@ class NotCondition(Condition):
 # -------------------------
 # Query Builder
 # -------------------------
-
+import uuid
 class ConditionContainer(BaseModel):
+    name: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Name of the condition container")
     conditions: list[
         Union[
             EqCondition, InCondition, ContainsCondition, CompareCondition, AndCondition, OrCondition, NotCondition

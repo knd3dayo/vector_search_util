@@ -75,6 +75,18 @@ class SQLiteClient:
             ''')
             conn.commit()
 
+    def __create_conditions_table__(self):
+        # ConditionContainer用のテーブルを作成する
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.cursor()
+            cur.execute('''
+                CREATE TABLE IF NOT EXISTS conditions (
+                    name TEXT NOT NULL PRIMARY KEY,
+                    condition_data TEXT NOT NULL
+                )
+            ''')
+            conn.commit()
+
     def get_content_by_source_id(self, source_id: str) -> str :
         query = "SELECT source_content FROM documents WHERE source_id = ?"
         with sqlite3.connect(self.db_path) as conn:
@@ -295,3 +307,46 @@ class SQLiteClient:
         if new_tags:
             await self.upsert_tags(new_tags)
 
+
+    async def get_conditions(self, name: str | None = None) -> list[ConditionContainer]:
+        query = "SELECT name, condition_data FROM conditions"
+        if name:
+            query += " WHERE name = ?"
+        
+        conditions = []
+        async with aiosqlite.connect(self.db_path) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(query, (name,))
+                rows = await cur.fetchall()
+                for row in rows:
+                    condition_data = json.loads(row[1])
+                    condition_container = ConditionContainer(name=row[0], **condition_data)
+                    conditions.append(condition_container)
+        return conditions
+    
+    async def upsert_conditions(self, conditions: list[ConditionContainer]):
+        async with aiosqlite.connect(self.db_path) as conn:
+            async with conn.cursor() as cur:
+                await cur.executemany('''
+                    INSERT INTO conditions (name, condition_data)
+                    VALUES (?, ?)
+                    ON CONFLICT(name) DO UPDATE SET condition_data=excluded.condition_data
+                ''', [(condition.name, json.dumps(condition.model_dump(exclude={"name"}), ensure_ascii=False)) for condition in conditions])
+            await conn.commit()
+    
+    async def delete_conditions(self, names: list[str]):
+        async with aiosqlite.connect(self.db_path) as conn:
+            async with conn.cursor() as cur:
+                await cur.executemany('''
+                    DELETE FROM conditions WHERE name = ?
+                ''', [(name,) for name in names])
+            await conn.commit()
+
+    async def delete_all_conditions(self):
+        async with aiosqlite.connect(self.db_path) as conn:
+            async with conn.cursor() as cur:
+                await cur.execute('''
+                    DELETE FROM conditions
+                ''')
+            await conn.commit()
+            
