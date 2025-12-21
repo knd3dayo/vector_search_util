@@ -322,52 +322,15 @@ class ConditionContainer(BaseModel):
 
         translator = PostgresJsonbTranslator()
         return translator.translate(self.build())
+
+    # --- SQLite3 JSON SQL 生成 ---
+    def to_sqlite_sql(self):
+        if len(self.conditions) == 0:
+            return ""
+
+        translator = SqliteJsonTranslator()
+        return translator.translate(self.build())
     
-class PstgresTranslator:
-    def translate(self, condition_dict):
-        return self._translate_dict(condition_dict)
-
-    def _translate_dict(self, d):
-        clauses = []
-        for key, value in d.items():
-            if key == "$and":
-                sub = [self._translate_dict(v) for v in value]
-                clauses.append("(" + " AND ".join(sub) + ")")
-            elif key == "$or":
-                sub = [self._translate_dict(v) for v in value]
-                clauses.append("(" + " OR ".join(sub) + ")")
-            else:
-                clauses.append(self._translate_field(key, value))
-        return " AND ".join(clauses)
-
-    def _translate_field(self, field, expr):
-        if isinstance(expr, dict):
-            if "$in" in expr:
-                vals = ",".join([f"'{v}'" for v in expr["$in"]])
-                return f"'{field}' IN ({vals})"
-
-            if "$regex" in expr:
-                return f"'{field}' LIKE '%{expr['$regex']}%'"
-
-            if "$gte" in expr:
-                return f"'{field}' >= {expr['$gte']}"
-
-            if "$lte" in expr:
-                return f"'{field}' <= {expr['$lte']}"
-
-            if "$gt" in expr:
-                return f"'{field}' > {expr['$gt']}"
-
-            if "$lt" in expr:
-                return f"'{field}' < {expr['$lt']}"
-
-            if "$not" in expr:
-                inner = self._translate_field(field, expr["$not"])
-                return f"NOT ({inner})"
-
-        # eq
-        return f"'{field}' = '{expr}'"    
-
 class PostgresJsonbTranslator:
     def translate(self, condition_dict, json_field: str = "cmetadata"):
         return self._translate_dict(condition_dict, json_field)
@@ -412,3 +375,80 @@ class PostgresJsonbTranslator:
 
         # eq
         return f"({json_field}->>'{field}') = '{expr}'"
+
+
+class SqliteJsonTranslator:
+    """SQLite3向け（JSON1拡張）WHERE句生成。
+
+    - json_extract(json_field, '$.key') を使ってJSONから値を取り出す
+    - SQLite標準では正規表現が無い前提で $regex は LIKE にマップ
+
+    NOTE: 既存のPostgresJsonbTranslatorと同様、現状はSQL文字列を直接生成します。
+    """
+
+    def translate(self, condition_dict, json_field: str = "cmetadata") -> str:
+        return self._translate_dict(condition_dict, json_field)
+
+    def _translate_dict(self, d, json_field: str) -> str:
+        clauses: list[str] = []
+        for key, value in d.items():
+            if key == "$and":
+                sub = [self._translate_dict(v, json_field) for v in value]
+                clauses.append("(" + " AND ".join(sub) + ")")
+            elif key == "$or":
+                sub = [self._translate_dict(v, json_field) for v in value]
+                clauses.append("(" + " OR ".join(sub) + ")")
+            else:
+                clauses.append(self._translate_field(key, value, json_field))
+        return " AND ".join(clauses)
+
+    def _json_extract(self, json_field: str, field: str) -> str:
+        # fieldにクォートが必要なケース（記号など）がある場合はここを拡張
+        return f"json_extract({json_field}, '$.{field}')"
+
+    def _sql_literal(self, v: Any) -> str:
+        if v is None:
+            return "NULL"
+        if isinstance(v, bool):
+            return "1" if v else "0"
+        if isinstance(v, (int, float)):
+            return str(v)
+        # string/その他
+        s = str(v).replace("'", "''")
+        return f"'{s}'"
+
+    def _translate_field(self, field: str, expr: Any, json_field: str) -> str:
+        extracted = self._json_extract(json_field, field)
+
+        if isinstance(expr, dict):
+            if "$in" in expr:
+                vals = ",".join([self._sql_literal(v) for v in expr["$in"]])
+                return f"{extracted} IN ({vals})"
+
+            if "$regex" in expr:
+                # 部分一致（LIKE）
+                like = str(expr["$regex"]).replace("%", "\\%")
+                like = like.replace("_", "\\_")
+                like = like.replace("'", "''")
+                return f"{extracted} LIKE '%{like}%' ESCAPE '\\'"
+
+            if "$gte" in expr:
+                return f"CAST({extracted} AS REAL) >= {self._sql_literal(expr['$gte'])}"
+
+            if "$lte" in expr:
+                return f"CAST({extracted} AS REAL) <= {self._sql_literal(expr['$lte'])}"
+
+            if "$gt" in expr:
+                return f"CAST({extracted} AS REAL) > {self._sql_literal(expr['$gt'])}"
+
+            if "$lt" in expr:
+                return f"CAST({extracted} AS REAL) < {self._sql_literal(expr['$lt'])}"
+
+            if "$not" in expr:
+                inner = self._translate_field(field, expr["$not"], json_field)
+                return f"NOT ({inner})"
+
+        # eq
+        if expr is None:
+            return f"{extracted} IS NULL"
+        return f"{extracted} = {self._sql_literal(expr)}"
