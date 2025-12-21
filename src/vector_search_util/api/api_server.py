@@ -47,7 +47,7 @@ async def get_langchain_documents(
 async def vector_search(
     query: Annotated[str, "The search query string."],
     category: Annotated[str, "The category to filter the search by."] = "",
-    filter: Annotated[ConditionContainer, "A dictionary of tags to filter the search by. "] = ConditionContainer(),
+    conditions: Annotated[ConditionContainer, "A dictionary of tags to filter the search by. "] = ConditionContainer(),
     num_results: Annotated[int, "The number of results to return."] = 5,
 ) -> list[SourceDocumentData]:
     
@@ -63,7 +63,7 @@ async def vector_search(
         list: A list of search results.
     """
     embedding_client = EmbeddingClient()
-    results = await embedding_client.vector_search(query, category, filter, num_results)
+    results = await embedding_client.vector_search(query, category, conditions, num_results)
     return results
 
 # get documents
@@ -71,7 +71,7 @@ async def vector_search(
 async def get_documents(
     source_ids: Annotated[list[str], "A list of source IDs of documents to retrieve."] = [],
     category_ids: Annotated[list[str], "A list of category IDs to filter documents by."] = [],
-    filter: Annotated[ConditionContainer, "A dictionary of tags to filter documents by. "] = ConditionContainer(),
+    conditions: Annotated[ConditionContainer, "A dictionary of tags to filter documents by. "] = ConditionContainer(),
 ) -> list[SourceDocumentData]:
     """Retrieve documents from the vector database based on a list of source IDs.
 
@@ -84,7 +84,7 @@ async def get_documents(
     """
     config = EmbeddingConfig()
     embedding_client = EmbeddingClient(config)
-    _, documents = await embedding_client.get_documents(source_ids, category_ids, filter)
+    _, documents = await embedding_client.get_documents(source_ids, category_ids, conditions)
     return documents
 
 # upsert documents
@@ -123,6 +123,7 @@ async def delete_documents(
 @app.get("/get_categories", response_model=list)
 async def get_categories(
     name_list: Annotated[list[str], "A list of category names to retrieve."] = [],
+    conditions: Annotated[ConditionContainer, "A dictionary of tags to filter categories by. "] = ConditionContainer(),
 ) -> list[CategoryData]:
     """Retrieve categories from the vector database.
 
@@ -133,7 +134,7 @@ async def get_categories(
     """
     config = EmbeddingConfig()
     embedding_client = EmbeddingClient(config)
-    categories = await embedding_client.get_categories(name_list)
+    categories = await embedding_client.get_categories(name_list, conditions)
     return categories
 
 # upsert categories
@@ -168,7 +169,9 @@ async def delete_categories(
 
 # get relations
 @app.get("/get_relations")
-async def get_relations() -> list[RelationData]:
+async def get_relations( 
+    conditions: Annotated[ConditionContainer, "A dictionary of tags to filter relations by. "] = ConditionContainer()
+    ) -> list[RelationData]:
     """Retrieve relations from the vector database.
 
     Returns:
@@ -176,7 +179,7 @@ async def get_relations() -> list[RelationData]:
     """
     config = EmbeddingConfig()
     embedding_client = EmbeddingClient(config)
-    relations = await embedding_client.get_relations()
+    relations = await embedding_client.get_relations(conditions=conditions)
     return relations
 
 # upsert relations

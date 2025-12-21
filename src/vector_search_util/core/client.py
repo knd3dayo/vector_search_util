@@ -32,8 +32,8 @@ class EmbeddingClient:
         results = await self.vector_db.vector_search(query, category, condition, top_k)
         return results
     
-    async def vector_search(self, query: str, category: str = "", condition: ConditionContainer = ConditionContainer(), top_k: int = 5) -> list[SourceDocumentData]:
-        results = await self.vector_db.vector_search(query, category, condition, top_k)
+    async def vector_search(self, query: str, category: str = "", conditions: ConditionContainer = ConditionContainer(), top_k: int = 5) -> list[SourceDocumentData]:
+        results = await self.vector_db.vector_search(query, category, conditions, top_k)
         return SourceDocumentData.from_langchain_documents(results, self.sqlite_client.get_content_by_source_id)
 
     async def get_langchain_documents(
