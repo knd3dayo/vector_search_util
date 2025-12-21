@@ -169,7 +169,10 @@ async def delete_categories(
 
 # get relations
 @app.get("/get_relations")
-async def get_relations( 
+async def get_relations(
+    from_nodes: Annotated[list[str], "A list of source node IDs to filter relations by."] = [],
+    to_nodes: Annotated[list[str], "A list of target node IDs to filter relations by."] = [],
+    edge_types: Annotated[list[str], "A list of edge types to filter relations by."] = [],
     conditions: Annotated[ConditionContainer, "A dictionary of tags to filter relations by. "] = ConditionContainer()
     ) -> list[RelationData]:
     """Retrieve relations from the vector database.
@@ -179,7 +182,7 @@ async def get_relations(
     """
     config = EmbeddingConfig()
     embedding_client = EmbeddingClient(config)
-    relations = await embedding_client.get_relations(conditions=conditions)
+    relations = await embedding_client.get_relations(from_nodes, to_nodes, edge_types, conditions)
     return relations
 
 # upsert relations
