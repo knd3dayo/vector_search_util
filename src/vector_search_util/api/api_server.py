@@ -12,7 +12,7 @@ app = FastAPI()
 router = APIRouter()
 
 # vector searchでLangChainのDocumentsを返すAPI
-@router.get("/vector_search_langchain_documents", response_model=list)
+@router.get("/vector_search_langchain_documents")
 async def vector_search_langchain_documents(
     query: Annotated[str, "The search query string."],
     category: Annotated[str, "The category to filter the search by."] = "",
@@ -35,7 +35,7 @@ async def vector_search_langchain_documents(
     results = await embedding_client.vector_search_langchain_documents(query, category, filter, num_results)
     return results
 
-@router.get("/get_langchain_documents", response_model=list)
+@router.get("/get_langchain_documents")
 async def get_langchain_documents(
     source_ids: Annotated[list[str], "A list of source IDs of documents to retrieve."] = [],
     category_ids: Annotated[list[str], "A list of category IDs to filter documents by."] = [],
@@ -46,7 +46,7 @@ async def get_langchain_documents(
     return documents
 
 
-@router.get("/vector_search", response_model=list)
+@router.get("/vector_search")
 async def vector_search(
     query: Annotated[str, "The search query string."],
     category: Annotated[str, "The category to filter the search by."] = "",
@@ -70,7 +70,7 @@ async def vector_search(
     return results
 
 # get documents
-@router.get("/get_documents", response_model=list)
+@router.get("/get_documents")
 async def get_documents(
     source_ids: Annotated[list[str], "A list of source IDs of documents to retrieve."] = [],
     category_ids: Annotated[list[str], "A list of category IDs to filter documents by."] = [],
@@ -123,7 +123,7 @@ async def delete_documents(
     await embedding_client.delete_documents_by_source_ids(source_id_list, filter)
 
 # get categories
-@router.get("/get_categories", response_model=list)
+@router.get("/get_categories")
 async def get_categories(
     name_list: Annotated[list[str], "A list of category names to retrieve."] = [],
     conditions: Annotated[ConditionContainer, "A dictionary of tags to filter categories by. "] = ConditionContainer(),
